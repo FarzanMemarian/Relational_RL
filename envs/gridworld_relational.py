@@ -11,7 +11,9 @@ from pdb import set_trace
 
 
 class Gridworld: # Environment
-    def __init__(self, n_dim, start, n_obj, min_num, max_num):
+    def __init__(self, n_dim, start, n_obj, min_num, max_num,
+        not_moving_reward, terminal_reward, step_reward, goal_reward, final_goal_reward,
+        intrinsic_goal_reward, intrinsic_step_reward, intrinsic_wrong_goal_reward):
         # creates a square gridworld
         self.n_dim = n_dim
         self.n_obj = n_obj
@@ -22,7 +24,7 @@ class Gridworld: # Environment
         self.j = start[1]
         self.grid_mat = np.zeros((self.n_dim, self.n_dim),dtype=int)
 
-        # call functions
+        # actions objects and goals
         self.original_objects = self.create_objects() # it's a list
         self.place_objects()
         self.grid_flattened = np.ravel(self.grid_mat).reshape((1,n_dim*n_dim)) # 1D array
@@ -30,8 +32,18 @@ class Gridworld: # Environment
         self.allowable_actions = {}
         self.set_actions()
         self.selected_goals = []
-        self.target_current_goal = self.original_objects[0]
+        self.target_current_goal = self.original_objects[len(self.selected_goals)]
         self.all_actions = ['U','D','R','L']
+
+        # rewards
+        self.not_moving_reward = not_moving_reward
+        self.terminal_reward = terminal_reward
+        self.step_reward = step_reward
+        self.goal_reward = goal_reward
+        self.final_goal_reward = final_goal_reward
+        self.intrinsic_goal_reward = intrinsic_goal_reward
+        self.intrinsic_step_reward = intrinsic_step_reward
+        self.intrinsic_wrong_goal_reward = intrinsic_wrong_goal_reward
 
     def set_actions(self):
         # actions should be a dict of: (i, j): A (row, col): list of possible actions
@@ -57,6 +69,9 @@ class Gridworld: # Environment
                     if j == self.n_dim-1 and i == self.n_dim-1:
                         self.allowable_actions[(i,j)] = ['U','L']
 
+    def update_target_goal(self):
+        self.target_current_goal = self.original_objects[len(self.selected_goals)]
+
     def create_objects(self):
         a = np.arange(self.min_num, self.max_num+1)
         objects = np.random.choice(a, size=self.n_obj, replace=False, p=None)
@@ -75,45 +90,41 @@ class Gridworld: # Environment
     def reset(self):
         return self.start
 
-    def intrinsic_reward(self,state, goal):
+    def intrinsic_critique(self,state, goal):
         i = state[0]
         j = state[1]
-        intrinsic_goal_reward = 100
-        intrinsic_step_reward = -1
-        intrinsic_terminal_reward = -10000
         element = self.grid_mat[i,j]
+        goal_reached = False
+
         if element == 0:
-            reward = intrinsic_step_reward
+            reward = self.intrinsic_step_reward
         elif element == goal:
-            reward = intrinsic_goal_reward
+            reward = self.intrinsic_goal_reward
+            goal_reward = True
         else:
-            reward = intrinsic_terminal_reward
+            reward = self.intrinsic_wrong_goal_reward
             
-        return reward
+        return reward, goal_reached
 
     def extrinsic_reward(self,i,j):
-        terminal_reward = -10000
-        step_reward = -1
-        goal_reward = 100
-        final_goal_reward = 10000
-
         num_goals_selected = len(self.selected_goals)
+        final_goal = False
         if num_goals_selected == self.n_obj:
             final_goal = True        
 
         element = self.grid_mat[i,j]
         if element == 0:
-            reward = -step_reward
+            reward = -self.step_reward
         elif not final_goal:
-            if element == self.original_objects[num_goals_selected-1]:
-                reward = goal_reward
+            if element == self.target_current_goal:
+                reward = self.goal_reward
             else:
-                reward = terminal_reward
+                reward = self.terminal_reward
         else: # if the last goal is picked
             if element == self.original_objects[-1]:
-                reward = final_goal_reward
+                reward = self.final_goal_reward
             else: 
-                reward = terminal_reward
+                reward = self.terminal_reward
         return reward
 
     def set_state(self, s):
@@ -127,7 +138,27 @@ class Gridworld: # Environment
         return (self.i, self.j)
 
     def is_terminal(self, s):
-        return s not in self.allowable_actions
+        num_goals_selected = len(self.selected_goals)
+        final_goal = False
+        if num_goals_selected == self.n_obj:
+            final_goal = True        
+
+        i = s[0]
+        j = s[1]
+        element = self.grid_mat[i,j]
+        if element == 0:
+            return False
+        elif not final_goal:
+            if element == self.target_current_goal:
+                return False
+            else:
+                return True
+        else: # if the last goal is picked
+            if element == self.original_objects[-1]:
+                return False
+            else: 
+                return True 
+        
     
     def take_action(self, action_idx):
         action = self.all_actions[action_idx]
@@ -142,18 +173,9 @@ class Gridworld: # Environment
             elif action == 'L':
                 self.j -= 1
 
-            if self.grid_mat[self.i, self.j] != 0: 
-                if self.grid_mat[self.i, self.j] != self.target_current_goal:
-                    done = True # if the wrong object is reached the episode ends
-                else: # if the right object is reached
-                    done = False
-            else: # if no object is reached
-                done = False
-            # return a reward (if any) and the new state in the form of an array
-
-            return self.extrinsic_reward(self.i, self.j), np.asarray([self.i, self.j]), done
+            return self.extrinsic_reward(self.i, self.j), np.asarray([self.i, self.j])
         else:
-            return 0, np.asarray([self.i, self.j]), False
+            return self.not_moving_reward, np.asarray([self.i, self.j])
 
     def undo_move(self, action):
     # these are the opposite of what U/D/L/R should normally do

@@ -36,7 +36,7 @@ default_optimizer=RMSprop(lr=0.00025, rho=0.9, epsilon=1e-06)
 default_batch_size = 1000
 default_gamma = 0.975
 default_epsilon = 1.0
-default_actor_epsilon = [1.0]*6
+default_actor_epsilon = 1.0
 default_tau = 0.001
 
 # Default architecture for the meta controller
@@ -131,27 +131,21 @@ class hDQN:
         actor.compile(loss=self.loss, optimizer=self.optimizer)
         return actor
         
-    def select_move(self, agent_state, goal, goal_idx):
-        agent_env_state = np.concatenate((self.env.grid_flattened, agent_state.reshape((1,2))), axis=1)
-        state_goal_feature = np.concatenate((agent_env_state, np.array(goal).reshape((1,1))), axis=1)
-        if random.random() < self.actor_epsilon[goal_idx]:
-            action_idx = np.argmax(self.actor.predict(state_goal_feature, verbose=0))
-            return action_idx, self.env.all_actions[action_idx]
-        else:
-            return self.random_action_selection()
+
 
     def select_goal(self, agent_state):
         agent_env_state = np.concatenate((self.env.grid_flattened, agent_state.reshape((1,2))), axis=1)
-        if self.meta_epsilon < random.random():
+        if self.meta_epsilon > random.random():
             pred = self.meta_controller.predict(agent_env_state, verbose=0)
             print("pred shape: " + str(pred.shape))
             goal_idx = np.argmax(pred)
             goal = self.env.original_objects[goal_idx]
-            self.env.selected_goals.append(goal)
-            return goal_idx, goal
         else:
             print("Exploring")
-            return self.random_goal_selection()
+            goal_idx, goal = self.random_goal_selection()
+        self.env.update_target_goal()
+        self.env.selected_goals.append(goal)
+        return goal_idx, goal
 
     def random_goal_selection(self):
         goal_idx = np.random.choice(len(self.env.original_objects))
@@ -159,8 +153,19 @@ class hDQN:
         self.env.selected_goals.append(goal)
         return goal_idx, goal
 
-    def random_action_selection(self):
-        action_idx = np.random.choice(len(self.env.actions[self.env.i, self.env.j]))
+    def select_action(self, agent_state, goal, goal_idx):
+        agent_env_state = np.concatenate((self.env.grid_flattened, agent_state.reshape((1,2))), axis=1)
+        state_goal_feature = np.concatenate((agent_env_state, np.array(goal).reshape((1,1))), axis=1)
+        if random.random() > self.actor_epsilon:
+            action_idx = np.argmax(self.actor.predict(state_goal_feature, verbose=0))
+            action = self.env.all_actions[action_idx]
+        else:
+            action_idx, action = self.random_move_selection()
+        return action_idx, action
+
+
+    def random_move_selection(self):
+        action_idx = np.random.choice(len(self.env.allowable_actions[self.env.i, self.env.j]))
         action = self.env.all_actions[action_idx]
         return action_idx, action
 
@@ -215,8 +220,10 @@ class hDQN:
         if 0 < len(self.meta_memory):
             sample_size = min(self.meta_batch_size, len(self.meta_memory))
             exps = [random.choice(self.meta_memory) for _ in range(sample_size)]
-            state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, agent_state.reshape((1,2))], axis=1) for exp in exps]))
-            next_state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, next_agent_state.reshape((1,2))], axis=1) for exp in exps]))
+            state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, 
+                          exp.agent_state.reshape((1,2))], axis=1) for exp in exps]))
+            next_state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, 
+                               exp.next_agent_state.reshape((1,2))], axis=1) for exp in exps]))
             try:
                 Q_preds = self.meta_controller.predict(state_vectors, verbose=0)
             except Exception as e:
