@@ -28,7 +28,7 @@ def main():
 
 
     num_thousands = 12
-    num_epis = 1000
+    num_epis = 10
     visits = np.zeros((num_thousands, n_dim, n_dim))
     anneal_factor = (1.0-0.1)/(num_thousands * num_epis)
     print("Annealing factor: " + str(anneal_factor))
@@ -46,18 +46,18 @@ def main():
                 goal_reached = False
                 s0_agent = agent_state
                 while not done and not goal_reached: # this loop is for meta, while state not terminal
-                    action = agent.select_move(agent_state, goal, goal_idx) # controller selects an action among permitable actions
+                    action_idx, action = agent.select_move(agent_state, goal, goal_idx) # controller selects an action among permitable actions
                     # print(str((state,action)) + "; ")
-                    external_reward, next_agent_state, done = env.take_action(action) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
+                    external_reward, next_agent_state, done = env.take_action(action_idx) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
                     visits[episode_thousand, next_agent_state[0], next_agent_state[1]] += 1
                     intrinsic_reward = env.intrinsic_reward(next_agent_state, goal)
-                    goal_reached = next_state == goal
+                    goal_reached = env.grid_mat[next_agent_state[0], next_agent_state[1]] == goal
                     if goal_reached:
                         agent.goal_success[goal_idx] += 1
                         print("Goal reached!! ")
                     if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                         print("final object/number picked!! ")
-                    exp = ActorExperience(agent_state, goal, action, intrinsic_reward, next_agent_state, done)
+                    exp = ActorExperience(agent_state, goal, action_idx, intrinsic_reward, next_agent_state, done)
                     agent.store(exp, meta=False)
                     agent.update(meta=False)
                     agent.update(meta=True)
@@ -65,7 +65,7 @@ def main():
                     agent_state = next_agent_state
                 exp = MetaExperience(s0_agent, goal, total_external_reward, next_agent_state, done)
                 agent.store(exp, meta=True)
-                
+                set_trace()
                 #Annealing 
                 agent.meta_epsilon -= anneal_factor
                 avg_success_rate = agent.goal_success[goal-1] / agent.goal_selected[goal-1]

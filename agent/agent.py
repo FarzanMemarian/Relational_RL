@@ -13,7 +13,7 @@ from pdb import set_trace
 # DEFAULT ARCHITECTURE FOR THE META CONTROLLER
 default_meta_layers = [Dense] * 5
 default_meta_inits = ['lecun_uniform'] * 5
-default_meta_nodes = [40, 150, 150, 150, 10] 
+default_meta_nodes = [20, 30, 30, 30, 10] 
 default_meta_input_dim = 83
                 # 83 = number of squares(81) + agent_state(2)
                 # 10 is the number of objects
@@ -26,7 +26,7 @@ default_meta_epsilon = 1.0
 # DEFAULT ARCHITECTURES FOR THE LOWER LEVEL CONTROLLER/ACTOR
 default_layers = [Dense] * 5
 default_inits = ['lecun_uniform'] * 5
-default_nodes = [40, 150, 150, 150, 4]
+default_nodes = [20, 30, 30, 30, 4] 
 default_input_dim = 84
                 # 84 = number of squares(81) + agent_state(2) + goal(1)
                 # 4 is the total number of moves
@@ -136,7 +136,7 @@ class hDQN:
         state_goal_feature = np.concatenate((agent_env_state, np.array(goal).reshape((1,1))), axis=1)
         if random.random() < self.actor_epsilon[goal_idx]:
             action_idx = np.argmax(self.actor.predict(state_goal_feature, verbose=0))
-            return self.env.all_actions[action_idx]
+            return action_idx, self.env.all_actions[action_idx]
         else:
             return self.random_action_selection()
 
@@ -161,8 +161,8 @@ class hDQN:
 
     def random_action_selection(self):
         action_idx = np.random.choice(len(self.env.actions[self.env.i, self.env.j]))
-        action = self.env.actions[action_idx]
-        return action
+        action = self.env.all_actions[action_idx]
+        return action_idx, action
 
 
     # def criticize(self, goal, next_agent_state):
@@ -179,27 +179,30 @@ class hDQN:
                 self.memory = self.memory[-1000000:]
 
     def _update_controller(self):
-        exps = [random.choice(self.memory) for _ in range(self.batch_size)]
-        state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, exp.agent_state, exp.goal], axis=1) for exp in exps]))
-        next_state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, exp.next_agent_state, exp.goal], axis=1) for exp in exps]))
+        sample_size = min(self.batch_size, len(self.memory))
+        exps = [random.choice(self.memory) for _ in range(sample_size)]
+        state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, 
+                        exp.agent_state.reshape((1,2)), exp.goal.reshape((1,1))], axis=1) for exp in exps]))
+        next_state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, 
+                        exp.next_agent_state.reshape((1,2)), exp.goal.reshape((1,1))], axis=1) for exp in exps]))
         try:
-            reward_vectors = self.actor.predict(state_vectors, verbose=0)
+            Q_preds = self.actor.predict(state_vectors, verbose=0)
         except Exception as e:
             state_vectors = np.expand_dims(state_vectors, axis=0)
-            reward_vectors = self.actor.predict(state_vectors, verbose=0)
+            Q_preds = self.actor.predict(state_vectors, verbose=0)
         
         try:
-            next_state_reward_vectors = self.target_actor.predict(next_state_vectors, verbose=0)
+            next_state_Q_preds = self.target_actor.predict(next_state_vectors, verbose=0)
         except Exception as e:
             next_state_vectors = np.expand_dims(next_state_vectors, axis=0)
-            next_state_reward_vectors = self.target_actor.predict(next_state_vectors, verbose=0)
+            next_state_Q_preds = self.target_actor.predict(next_state_vectors, verbose=0)
         
         for i, exp in enumerate(exps):
-            reward_vectors[i][exp.action] = exp.reward
+            Q_preds[i,exp.action] = exp.reward
             if not exp.done:
-                reward_vectors[i][exp.action] += self.gamma * max(next_state_reward_vectors[i])
-        reward_vectors = np.asarray(reward_vectors)
-        self.actor.fit(state_vectors, reward_vectors, verbose=0)
+                Q_preds[i,exp.action] += self.gamma * max(next_state_Q_preds[i])
+        # Q_preds = np.asarray(Q_preds)
+        self.actor.fit(state_vectors, Q_preds, verbose=0)
         
         #Update target network
         actor_weights = self.actor.get_weights()
@@ -210,26 +213,27 @@ class hDQN:
 
     def _update_meta(self):
         if 0 < len(self.meta_memory):
-            exps = [random.choice(self.meta_memory) for _ in range(self.meta_batch_size)]
-            state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, agent_state], axis=1) for exp in exps]))
-            next_state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, next_agent_state], axis=1) for exp in exps]))
+            sample_size = min(self.meta_batch_size, len(self.meta_memory))
+            exps = [random.choice(self.meta_memory) for _ in range(sample_size)]
+            state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, agent_state.reshape((1,2))], axis=1) for exp in exps]))
+            next_state_vectors = np.squeeze(np.asarray([np.concatenate([self.env.grid_flattened, next_agent_state.reshape((1,2))], axis=1) for exp in exps]))
             try:
-                reward_vectors = self.meta_controller.predict(state_vectors, verbose=0)
+                Q_preds = self.meta_controller.predict(state_vectors, verbose=0)
             except Exception as e:
                 state_vectors = np.expand_dims(state_vectors, axis=0)
-                reward_vectors = self.meta_controller.predict(state_vectors, verbose=0)
+                Q_preds = self.meta_controller.predict(state_vectors, verbose=0)
             
             try:
-                next_state_reward_vectors = self.target_meta_controller.predict(next_state_vectors, verbose=0)
+                next_state_Q_preds = self.target_meta_controller.predict(next_state_vectors, verbose=0)
             except Exception as e:
                 next_state_vectors = np.expand_dims(next_state_vectors, axis=0)
-                next_state_reward_vectors = self.target_meta_controller.predict(next_state_vectors, verbose=0)
+                next_state_Q_preds = self.target_meta_controller.predict(next_state_vectors, verbose=0)
             
             for i, exp in enumerate(exps):
-                reward_vectors[i][np.argmax(exp.goal)] = exp.reward
+                Q_preds[i,np.argmax(exp.goal)] = exp.reward
                 if not exp.done:
-                    reward_vectors[i][np.argmax(exp.goal)] += self.gamma * max(next_state_reward_vectors[i])
-            self.meta_controller.fit(state_vectors, reward_vectors, verbose=0)
+                    Q_preds[i,np.argmax(exp.goal)] += self.gamma * max(next_state_Q_preds[i])
+            self.meta_controller.fit(state_vectors, Q_preds, verbose=0)
             
             #Update target network
             meta_weights = self.meta_controller.get_weights()

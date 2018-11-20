@@ -97,9 +97,8 @@ class Gridworld: # Environment
         goal_reward = 100
         final_goal_reward = 10000
 
-        
         num_goals_selected = len(self.selected_goals)
-        if num_goals_selected == n_obj:
+        if num_goals_selected == self.n_obj:
             final_goal = True        
 
         element = self.grid_mat[i,j]
@@ -115,8 +114,6 @@ class Gridworld: # Environment
                 reward = final_goal_reward
             else: 
                 reward = terminal_reward
-
-
         return reward
 
     def set_state(self, s):
@@ -132,8 +129,8 @@ class Gridworld: # Environment
     def is_terminal(self, s):
         return s not in self.allowable_actions
     
-    def take_action(self, action):
-        set_trace()
+    def take_action(self, action_idx):
+        action = self.all_actions[action_idx]
     # check if legal move first, if not, nothing happens!
         if action in self.allowable_actions[(self.i, self.j)]:
             if action == 'U':
@@ -145,8 +142,8 @@ class Gridworld: # Environment
             elif action == 'L':
                 self.j -= 1
 
-            if grid_mat[self.i, self.j] != 0: 
-                if grid_mat[self.i, self.j] != self.target_current_goal:
+            if self.grid_mat[self.i, self.j] != 0: 
+                if self.grid_mat[self.i, self.j] != self.target_current_goal:
                     done = True # if the wrong object is reached the episode ends
                 else: # if the right object is reached
                     done = False
