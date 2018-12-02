@@ -1,0 +1,2 @@
+game_won_counter: 0
+game_over_counter: 100
