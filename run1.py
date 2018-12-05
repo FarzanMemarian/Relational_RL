@@ -3,7 +3,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import namedtuple
+<<<<<<< HEAD
 from envs.gridworld1 import Gridworld
+=======
+from envs.gridworld_relational1 import Gridworld
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
 from agent.agent1 import hDQN
 from keras.models import Sequential
 from keras.layers import Dense, Activation
@@ -18,12 +22,22 @@ def init():
     num_thousands = 1
     num_epis = 100
 
+<<<<<<< HEAD
     # GRID WORLD GEOMETRICAL PARAMETERS
     n_dim = 3 # pick odd numbers
     start = np.zeros((1,2),dtype=int)
     start[0,0] = 0
     start[0,1] = 1
     n_obj = 2
+=======
+
+    # GRID WORLD GEOMETRICAL PARAMETERS
+    n_dim = 5 # pick odd numbers
+    start = np.zeros((1,2),dtype=int)
+    start[0,0] = 0
+    start[0,1] = 1
+    n_obj = 3
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
     min_num = 1
     max_num = 30
 
@@ -39,6 +53,25 @@ def init():
     intrinsic_step_reward = -1
     intrinsic_wrong_goal_reward = -200
 
+<<<<<<< HEAD
+=======
+    # create and initialize the environment   
+    env = Gridworld(n_dim, 
+                    start, 
+                    n_obj, 
+                    min_num, 
+                    max_num,
+                    not_moving_reward, 
+                    game_over_reward, 
+                    step_reward, 
+                    current_goal_reward, 
+                    final_goal_reward,
+                    intrinsic_goal_reward, 
+                    intrinsic_step_reward, 
+                    intrinsic_wrong_goal_reward)
+
+
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
     # PARAMETERS OF MEATA CONTROLLER
     meta_input_dim = 2 + n_dim**2 + 1
     meta_nodes = [40, 1]
@@ -49,7 +82,10 @@ def init():
     meta_optimizer=RMSprop(lr=0.00025, rho=0.9, epsilon=1e-06)
     meta_batch_size = 1000
     meta_epsilon = 1
+<<<<<<< HEAD
     meta_memory_size = 10000
+=======
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
 
     # PARAMETERS OF THE CONTROLLER
     input_dim = 2 + 1 + n_dim**2
@@ -64,6 +100,7 @@ def init():
     gamma = 0.975
     epsilon = 1
     tau = 0.001
+<<<<<<< HEAD
     memory_size = 10000
 
     # create and initialize the environment   
@@ -80,6 +117,8 @@ def init():
                     intrinsic_goal_reward, 
                     intrinsic_step_reward, 
                     intrinsic_wrong_goal_reward)
+=======
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
 
     # create and initialize the agent
     agent = hDQN(env=env, 
@@ -102,9 +141,13 @@ def init():
                 gamma=gamma,
                 meta_epsilon=meta_epsilon, 
                 epsilon=epsilon, 
+<<<<<<< HEAD
                 tau = tau,
                 memory_size = memory_size,
                 meta_memory_size = meta_memory_size)
+=======
+                tau = tau)
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
 
     return env, agent, num_thousands, num_epis
 
@@ -149,7 +192,11 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
 
                     game_over = env.is_terminal(next_agent_state)[0]
                     game_won = env.is_terminal(next_agent_state)[1]
+<<<<<<< HEAD
                     terminal = game_over or game_won # terminal refers to next state 
+=======
+                    terminal = game_over or game_won
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
                     object_reached = env.grid_mat[i,j]
                     if selected_goal_reached:
                         # agent.goal_success[goal_idx] += 1
@@ -184,9 +231,13 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
 
                     # if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                     #     print("final object/number picked!! ")
+<<<<<<< HEAD
                     controller_done = selected_goal_reached or terminal # note that controller_done refers 
                                                                         # to next stat
 
+=======
+                    controller_done = selected_goal_reached or terminal
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
                     
                     state = np.concatenate((env_state_flat, agent_state), axis=1)
                     next_state = np.concatenate((next_env_state_flat, next_agent_state), axis=1)
@@ -355,7 +406,11 @@ def train_controller(env, agent):
     with open("saved_models/controller.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
+<<<<<<< HEAD
     agent.controller.save_weights("saved_models/controller.h5")
+=======
+    agent.controller.save_weights("controller.h5")
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
     print("Saved model to disk")
 
     # serialize model to JSON
@@ -363,7 +418,11 @@ def train_controller(env, agent):
     with open("saved_models/target_controller.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
+<<<<<<< HEAD
     agent.meta_controller.save_weights("saved_models/target_controller.h5")
+=======
+    agent.meta_controller.save_weights("target_controller.h5")
+>>>>>>> 2eb38850d327954965563e8bae26b0bedb3aa031
     print("Saved model to disk")
 
 

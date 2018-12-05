@@ -3,11 +3,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import namedtuple
-from envs.gridworld1 import Gridworld
-from agent.agent1 import hDQN
-from keras.models import Sequential
-from keras.layers import Dense, Activation
-from keras.optimizers import SGD, RMSprop
+from envs.gridworld2 import Gridworld
+from agent.agent2 import hDQN
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
 from pdb import set_trace 
 import pickle
 
@@ -20,7 +23,7 @@ def init():
 
     # GRID WORLD GEOMETRICAL PARAMETERS
     n_dim = 3 # pick odd numbers
-    start = np.zeros((1,2),dtype=int)
+    start = torch.zeros([1,2], dtype=torch.int)
     start[0,0] = 0
     start[0,1] = 1
     n_obj = 2
@@ -34,32 +37,17 @@ def init():
     current_goal_reward = 300
     final_goal_reward = 10000
 
-    # INTRINSIC REWARDS
-    intrinsic_goal_reward = 200
-    intrinsic_step_reward = -1
-    intrinsic_wrong_goal_reward = -200
+    # int REWARDS
+    int_goal_reward = 200
+    int_step_reward = -1
+    int_wrong_goal_reward = -200
 
-    # PARAMETERS OF MEATA CONTROLLER
-    meta_input_dim = 2 + n_dim**2 + 1
-    meta_nodes = [40, 1]
-    meta_layers = [Dense] * 2
-    meta_inits = ['lecun_uniform'] * 2
-    meta_activations = ['relu'] * 2
-    meta_loss = "mean_squared_error"
-    meta_optimizer=RMSprop(lr=0.00025, rho=0.9, epsilon=1e-06)
+    # PARAMETERS OF MEATA cntr
     meta_batch_size = 1000
     meta_epsilon = 1
     meta_memory_size = 10000
 
-    # PARAMETERS OF THE CONTROLLER
-    input_dim = 2 + 1 + n_dim**2
-    n_moves = 4
-    nodes = [40, n_moves] 
-    layers = [Dense] * 2
-    inits = ['lecun_uniform'] * 2
-    activations = ['relu'] * 2
-    loss = "mean_squared_error"
-    optimizer=RMSprop(lr=0.00025, rho=0.9, epsilon=1e-06)
+    # PARAMETERS OF THE cntr
     batch_size = 100
     gamma = 0.975
     epsilon = 1
@@ -77,26 +65,12 @@ def init():
                     step_reward, 
                     current_goal_reward, 
                     final_goal_reward,
-                    intrinsic_goal_reward, 
-                    intrinsic_step_reward, 
-                    intrinsic_wrong_goal_reward)
+                    int_goal_reward, 
+                    int_step_reward, 
+                    int_wrong_goal_reward)
 
     # create and initialize the agent
     agent = hDQN(env=env, 
-                meta_layers=meta_layers, 
-                meta_inits=meta_inits,
-                meta_nodes=meta_nodes, 
-                meta_activations=meta_activations,
-                meta_input_dim = meta_input_dim,
-                meta_loss=meta_loss, 
-                meta_optimizer=meta_optimizer,
-                layers=layers, 
-                inits=inits, 
-                nodes=nodes,
-                activations=activations, 
-                input_dim = input_dim,
-                loss=loss,
-                optimizer=optimizer,
                 batch_size=batch_size,
                 meta_batch_size=meta_batch_size, 
                 gamma=gamma,
@@ -110,8 +84,8 @@ def init():
 
 def train_HRL(env, agent, num_thousands=12, num_epis=10):
 
-    controllerExperience = namedtuple("controllerExperience", 
-        ["state", "goal", "action", "reward", "next_state", "next_available_actions","controller_done"])
+    cntrExperience = namedtuple("cntrExperience", 
+        ["state", "goal", "action", "reward", "next_state", "next_available_actions","cntr_done"])
     MetaExperience = namedtuple("MetaExperience",   
         ["state", "goal", "reward", "next_state", "next_available_goals", "done"])
 
@@ -124,23 +98,24 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
     for episode_thousand in range(num_thousands):
         for episode in range(num_epis):
             print("\n\n\n\n### EPISODE "  + str(episode_thousand*num_thousands + episode) + "###")
-            agent_state, env_state_flat = env.reset() # the returned agent_state is just a (2,) numpy array 
+            agent_state, env_state = env.reset() # the returned agent_state is just a (2,) numpy array 
+            set_trace()
             visits[episode_thousand, agent_state[0,0], agent_state[0,1]] += 1
             terminal = False
-            while not terminal:  # this loop is for meta-controller, while state not terminal
-                goal = agent.select_goal(agent_state)  # meta controller selects a goal
+            while not terminal:  # this loop is for meta-cntr, while state not terminal
+                goal = agent.select_goal(agent_state)  # meta cntr selects a goal
                 # agent.goal_selected[goal_idx] += 1
                 print("\nNew Goal: "  + str(goal) + "\nState-Actions: ")
                 total_extrinsic_reward = 0
                 s0 = state = np.concatenate((agent_state, env_state_flat), axis=1)
                 selected_goal_reached = False
                 while not terminal and not selected_goal_reached: # this loop is for meta, while state not terminal
-                    action_idx, action = agent.select_action(agent_state, goal) # controller selects an action among permitable actions
+                    action_idx, action = agent.select_action(agent_state, goal) # cntr selects an action among permitable actions
                     # print(str((state,action)) + "; ")
                     extrinsic_reward, next_agent_state, next_env_state_flat = env.take_action(action_idx) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
                     i, j = next_agent_state[0,0], next_agent_state[0,1]
                     visits[episode_thousand, i, j] += 1
-                    intrinsic_reward, selected_goal_reached = env.intrinsic_critique(next_agent_state, goal)
+                    int_reward, selected_goal_reached = env.int_critique(next_agent_state, goal)
 
                     # print ("action ----> "  + action)
                     # print ("state after action ----> " + "[" + str(i) +", " + 
@@ -184,7 +159,7 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
 
                     # if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                     #     print("final object/number picked!! ")
-                    controller_done = selected_goal_reached or terminal # note that controller_done refers 
+                    cntr_done = selected_goal_reached or terminal # note that cntr_done refers 
                                                                         # to next stat
 
                     
@@ -193,10 +168,10 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
                     next_available_goals = env.current_objects
                     next_available_actions = env.allowable_actions[i,j]
 
-                    # if the state is terminal, the experiment will not even be added to the controllerExperience
+                    # if the state is terminal, the experiment will not even be added to the cntrExperience
                     # or the MetaEcperience, only the next_state can be terminal
-                    exp = controllerExperience(state, goal.reshape((1,1)), action_idx, intrinsic_reward,  
-                        next_state, next_available_actions, controller_done)
+                    exp = cntrExperience(state, goal.reshape((1,1)), action_idx, int_reward,  
+                        next_state, next_available_actions, cntr_done)
                     agent.store(exp, meta=False)
                     agent.update(meta=False)
                     agent.update(meta=True)
@@ -244,41 +219,41 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
     print ("SAVING THE MODELS .............")  
     print ()
     # serialize model to JSON
-    model_json = agent.meta_controller.to_json()
-    with open("saved_models/meta_controller.json", "w") as json_file:
+    model_json = agent.meta_cntr.to_json()
+    with open("saved_models/meta_cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.meta_controller.save_weights("saved_models/meta_controller.h5")
+    agent.meta_cntr.save_weights("saved_models/meta_cntr.h5")
     print("Saved model to disk")
 
     # serialize model to JSON
-    model_json = agent.target_meta_controller.to_json()
-    with open("saved_models/target_meta_controller.json", "w") as json_file:
+    model_json = agent.target_meta_cntr.to_json()
+    with open("saved_models/target_meta_cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.target_meta_controller.save_weights("saved_models/target_meta_controller.h5")
+    agent.target_meta_cntr.save_weights("saved_models/target_meta_cntr.h5")
     print("Saved model to disk")
 
     # serialize model to JSON
-    model_json = agent.controller.to_json()
-    with open("saved_models/controller.json", "w") as json_file:
+    model_json = agent.cntr.to_json()
+    with open("saved_models/cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.controller.save_weights("saved_models/controller.h5")
+    agent.cntr.save_weights("saved_models/cntr.h5")
     print("Saved model to disk")
 
   
-    model_json = agent.target_controller.to_json()
-    with open("saved_models/target_controller.json", "w") as json_file:
+    model_json = agent.target_cntr.to_json()
+    with open("saved_models/target_cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.meta_controller.save_weights("saved_models/target_controller.h5")
+    agent.meta_cntr.save_weights("saved_models/target_cntr.h5")
     print("Saved model to disk")
 
 
-def train_controller(env, agent):
+def train_cntr(env, agent):
 
-    controllerExperience = namedtuple("controllerExperience", 
+    cntrExperience = namedtuple("cntrExperience", 
         ["agent_state", "goal", "action", "reward", "next_agent_state", "done"])
     num_epis = 1000
     anneal_factor = (1.0-0.1)/(num_epis)
@@ -288,17 +263,17 @@ def train_controller(env, agent):
         agent_state = env.reset() # the returned agent_state is just a (2,) numpy array 
 
         terminal = False
-        while not terminal:  # this loop is for meta-controller, while state not terminal
-            goal = agent.select_goal(agent_state)  # meta controller selects a goal
+        while not terminal:  # this loop is for meta-cntr, while state not terminal
+            goal = agent.select_goal(agent_state)  # meta cntr selects a goal
             # agent.goal_selected[goal_idx] += 1
             print("\nNew Goal: "  + str(goal) + "\nState-Actions: ")
             s0_agent = agent_state
             selected_goal_reached = False
             while not terminal and not selected_goal_reached:
-                action_idx, action = agent.select_action(agent_state, goal) # controller selects an action among permitable actions
+                action_idx, action = agent.select_action(agent_state, goal) # cntr selects an action among permitable actions
                 # print(str((state,action)) + "; ")
                 extrinsic_reward, next_agent_state = env.take_action(action_idx) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
-                intrinsic_reward, selected_goal_reached = env.intrinsic_critique(next_agent_state, goal)
+                int_reward, selected_goal_reached = env.int_critique(next_agent_state, goal)
 
 
                 print ("action ----> "  + action)
@@ -328,14 +303,14 @@ def train_controller(env, agent):
                     print ("original objects: {}".format(env.original_objects))                        
                     print("********************")
                 
-                exp = controllerExperience(agent_state, goal, action_idx, intrinsic_reward, 
+                exp = cntrExperience(agent_state, goal, action_idx, int_reward, 
                                             next_agent_state, selected_goal_reached)
                 agent.store(exp, meta=False)
                 agent.update(meta=False)
                 agent_state = next_agent_state
         
 
-        #Annealing, just anneal the controller epsilon
+        #Annealing, just anneal the cntr epsilon
         # avg_success_rate = agent.goal_success[goal_idx] / agent.goal_selected[goal_idx]
         annealgent.epsilon -= anneal_factor
         
@@ -351,19 +326,19 @@ def train_controller(env, agent):
     
     # SAVING MODELS AND THEIR WEIGHTS
     # serialize model to JSON
-    model_json = agent.controller.to_json()
-    with open("saved_models/controller.json", "w") as json_file:
+    model_json = agent.cntr.to_json()
+    with open("saved_models/cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.controller.save_weights("saved_models/controller.h5")
+    agent.cntr.save_weights("saved_models/cntr.h5")
     print("Saved model to disk")
 
     # serialize model to JSON
-    model_json = agent.target_controller.to_json()
-    with open("saved_models/target_controller.json", "w") as json_file:
+    model_json = agent.target_cntr.to_json()
+    with open("saved_models/target_cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.meta_controller.save_weights("saved_models/target_controller.h5")
+    agent.meta_cntr.save_weights("saved_models/target_cntr.h5")
     print("Saved model to disk")
 
 
@@ -373,7 +348,7 @@ def main():
     env, agent, num_thousands, num_epis = init()
     train_HRL(env, agent, num_thousands, num_epis)
     # set_trace()
-    # train_controller(env, agent)
+    # train_cntr(env, agent)
     
             
     # eps = list(range(1,13))

@@ -13,29 +13,15 @@ import torch.optim as optim
 
 import sys
 sys.path.append('../')
-from envs.gridworld_relational1 import Gridworld
+from envs.gridworld1 import Gridworld
 from pdb import set_trace
 
 # DEFAULT ARCHITECTURE FOR THE META cntr
-default_meta_input_dim = 83
-default_meta_layers = [Dense] * 5
-default_meta_inits = ['lecun_uniform'] * 5
-default_meta_nodes = [20, 30, 30, 30, 10] 
-default_meta_activations = ['relu'] * 5
-default_meta_loss = "mean_squared_error"
-default_meta_optimizer=RMSprop(lr=0.00025, rho=0.9, epsilon=1e-06)
 default_meta_batch_size = 1000
 default_meta_epsilon = 1.0
 default_meta_memory_size = 10000
 
 # DEFAULT ARCHITECTURES FOR THE LOWER LEVEL cntr/cntr
-default_input_dim = 84
-default_layers = [Dense] * 5
-default_inits = ['lecun_uniform'] * 5
-default_nodes = [20, 30, 30, 30, 4] 
-default_activations = ['relu'] * 5
-default_loss = "mean_squared_error"
-default_optimizer=RMSprop(lr=0.00025, rho=0.9, epsilon=1e-06)
 default_batch_size = 1000
 default_gamma = 0.975
 default_epsilon = 1.0
@@ -45,8 +31,8 @@ default_memory_size = 10000
 
 class cntr_class(nn.Module):
 
-    def __init__(self, final_conv_dim):
-        super(meta_cntr, self).__init__()
+    def __init__(self, final_conv_dim=3):
+        super().__init__()
         # 1 input image channel, 6 output channels, 5x5 square convolution
         # kernel
         self.conv1 = nn.Conv2d(2, 6, 2)
@@ -79,8 +65,8 @@ class cntr_class(nn.Module):
 
 class meta_class(nn.Module):
 
-    def __init__(self, final_conv_dim):
-        super(meta_cntr, self).__init__()
+    def __init__(self, final_conv_dim=3):
+        super().__init__()
         # 1 input image channel, 6 output channels, 5x5 square convolution
         # kernel
         self.conv1 = nn.Conv2d(2, 6, 2)
@@ -115,20 +101,6 @@ class hDQN:
 
     def __init__(self, 
                 env, 
-                meta_layers=default_meta_layers,
-                meta_inits=default_meta_inits,
-                meta_nodes=default_meta_nodes, 
-                meta_activations=default_meta_activations,
-                meta_input_dim = default_meta_input_dim,
-                meta_loss=default_meta_loss, 
-                meta_optimizer=default_meta_optimizer,
-                layers=default_layers, 
-                inits=default_inits, 
-                nodes=default_nodes,
-                activations=default_activations, 
-                input_dim = default_input_dim,
-                loss=default_loss,
-                optimizer=default_optimizer, 
                 batch_size=default_batch_size,
                 meta_batch_size=default_meta_batch_size, 
                 gamma=default_gamma,
@@ -139,20 +111,6 @@ class hDQN:
                 meta_memory_size = default_meta_memory_size):
 
         self.env = env
-        self.meta_layers = meta_layers
-        self.meta_inits = meta_inits
-        self.meta_nodes = meta_nodes
-        self.meta_activations = meta_activations
-        self.meta_input_dim = meta_input_dim
-        self.meta_loss = meta_loss
-        self.meta_optimizer = meta_optimizer
-        self.layers = layers
-        self.inits = inits
-        self.nodes = nodes
-        self.activations = activations
-        self.input_dim = input_dim
-        self.loss = loss
-        self.optimizer = optimizer
         self.goal_selected = np.zeros(len(self.env.original_objects))
         self.goal_success = np.zeros(len(self.env.original_objects))
         self.meta_epsilon = meta_epsilon
@@ -166,7 +124,7 @@ class hDQN:
         self.memory_size = memory_size
         self.meta_memory_size = meta_memory_size
         self.meta_net = meta_class()
-        self.target_meta_net = target_meta_class()
+        self.target_meta_net = meta_class()
         self.cntr_net = cntr_class()
         self.target_cntr_net = cntr_class()
 
@@ -265,7 +223,7 @@ class hDQN:
             try:
                 Q_preds = self.meta_net(state)
             except Exception as e:
-                state = np.expand_dims(state, axis=)
+                state = np.expand_dims(state, axis=0)
                 Q_preds = self.meta_net(state)
             return Q_preds, state
 

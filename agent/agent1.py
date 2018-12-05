@@ -22,6 +22,7 @@ default_meta_batch_size = 1000
 default_meta_epsilon = 1.0
 default_meta_memory_size = 10000
 
+
 # DEFAULT ARCHITECTURES FOR THE LOWER LEVEL CONTROLLER/controller
 default_input_dim = 84
 default_layers = [Dense] * 5
@@ -35,6 +36,7 @@ default_gamma = 0.975
 default_epsilon = 1.0
 default_tau = 0.001
 default_memory_size = 10000
+
 
 class hDQN:
 
@@ -62,6 +64,8 @@ class hDQN:
                 tau = default_tau,
                 memory_size = default_memory_size,
                 meta_memory_size = default_meta_memory_size):
+
+
 
         self.env = env
         self.meta_layers = meta_layers
@@ -94,6 +98,7 @@ class hDQN:
         self.meta_memory = []
         self.memory_size = memory_size
         self.meta_memory_size = meta_memory_size
+
 
 
     def meta_controller(self):
@@ -200,6 +205,7 @@ class hDQN:
             if len(self.memory) > self.memory_size:
                 self.memory = self.memory[-self.memory_size:]
 
+
     def Q_controller(self, state_vectors, target):
         if target:
             try:
@@ -233,7 +239,6 @@ class hDQN:
             return Q_preds, state_vectors
 
 
-
     def _update_controller(self):
         sample_size = min(self.batch_size, len(self.memory))
         exps = [random.choice(self.memory) for _ in range(sample_size)]
@@ -251,6 +256,7 @@ class hDQN:
                 # if exp.controller_done is true, it means that the next state is terminal and we have 
                 # Q(s,.)=0 if s is terminal
                 Q_targets[i,exp.action] += self.gamma * max(next_state_Q_preds[i])
+
         # Q_preds = np.asarray(Q_preds)
         self.controller.fit(state_vectors, Q_targets, verbose=0)
         
@@ -261,6 +267,7 @@ class hDQN:
         for i in range(len(controller_weights)):
             controller_target_weights[i] = self.target_tau * controller_weights[i] + \
                                            (1 - self.target_tau) * controller_target_weights[i]
+
         self.target_controller.set_weights(controller_target_weights)
 
     def _update_meta(self):
@@ -271,7 +278,6 @@ class hDQN:
                                     axis=1) for exp in exps]))
 
             Q_preds, state_vectors = self.Q_meta(state_vectors, target=False)
-
             Q_targets = np.zeros((sample_size,1))
             for i, exp in enumerate(exps):
                 Q_targets[i,0] = exp.reward
@@ -280,6 +286,7 @@ class hDQN:
                     # this block finds the max Q in the next state for this particular experiment
                     # if exp.done is true, it means that the next state is terminal and we have 
                     # Q(s,.)=0 if s is terminal 
+
                     next_state_vectors = np.squeeze(np.asarray([np.concatenate([exp.state, next_goal.reshape((1,1))], 
                                     axis=1) for next_goal in exp.next_available_goals]))
                     next_state_Q_preds, next_state_vectors = self.Q_meta(next_state_vectors, target=True)

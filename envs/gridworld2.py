@@ -1,11 +1,17 @@
 import numpy as np
 import math
 import copy
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
 from pdb import set_trace
 
 
 """ NOTES
-- in take_actions, right now if the action is illegal, nothing happens and no reward is returned, this could be modified later
+- in take_actions, right now if the action is illegal, ncdothing happens and no reward is returned, this could be modified later
 
 """
 
@@ -32,8 +38,8 @@ class Gridworld: # Environment
         self.min_num = min_num
         self.max_num = max_num
         self.start = start
-        self.grid_mat = torch.zeros((self.n_dim, self.n_dim),dtype=int)
-        self.agent_loc = torch.zeros((1,2),dtype=int)
+        self.grid_mat = torch.zeros((self.n_dim, self.n_dim),dtype=torch.int)
+        self.agent_loc = torch.zeros((1,2),dtype=torch.int)
 
         # objects, gridworld and goals
         self.agent_loc[0,:] = self.start[0,:]
@@ -101,7 +107,8 @@ class Gridworld: # Environment
 
     def create_objects(self):
         a = np.arange(self.min_num, self.max_num+1)
-        objects = np.random.choice(a, size=self.n_obj, replace=False, p=None)
+        objects_np = np.random.choice(a, size=self.n_obj, replace=False, p=None)
+        objects = torch.from_numpy(objects_np)
         objects = list(objects)
         objects.sort(reverse=False)
         return objects

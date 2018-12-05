@@ -1,6 +1,9 @@
 howToRun
 IDEAL_GPU
 sftp-config.json
+# models
+*.json
+*.h5
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
