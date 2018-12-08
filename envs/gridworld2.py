@@ -11,14 +11,14 @@ from pdb import set_trace
 
 
 """ NOTES
-- in take_actions, right now if the action is illegal, ncdothing happens and no reward is returned, this could be modified later
+- in steps, right now if the action is illegal, ncdothing happens and no reward is returned, this could be modified later
 
 """
 
 
 class Gridworld: # Environment
     def __init__(self, 
-        n_dim, 
+        D_in, 
         start, 
         n_obj, 
         min_num, 
@@ -33,17 +33,18 @@ class Gridworld: # Environment
         int_wrong_goal_reward):
 
         # creates a square gridworld
-        self.n_dim = n_dim
+        self.D_in = D_in
         self.n_obj = n_obj
         self.min_num = min_num
         self.max_num = max_num
         self.start = start
-        self.grid_mat = torch.zeros((self.n_dim, self.n_dim),dtype=torch.int)
+        self.grid_mat = torch.zeros((self.D_in, self.D_in),dtype=torch.float32)
         self.agent_loc = torch.zeros((1,2),dtype=torch.int)
 
         # objects, gridworld and goals
         self.agent_loc[0,:] = self.start[0,:]
         self.original_objects = self.create_objects()
+
         self.object_idxs = self.place_objects()
 
         
@@ -71,34 +72,34 @@ class Gridworld: # Environment
 
     def set_actions(self):
         # actions should be a dict of: (i, j): A (row, col): list of possible actions
-        for i in range(self.n_dim):
-            for j in range(self.n_dim):
-                if i != 0 and i != self.n_dim-1 and j != 0 and j != self.n_dim-1:
+        for i in range(self.D_in):
+            for j in range(self.D_in):
+                if i != 0 and i != self.D_in-1 and j != 0 and j != self.D_in-1:
                     self.allowable_actions[(i,j)] = self.all_actions
                     self.allowable_action_idxs[(i,j)] = [0,1,2,3]
                 else:
-                    if i == 0 and j != 0 and j != self.n_dim-1:
+                    if i == 0 and j != 0 and j != self.D_in-1:
                         self.allowable_actions[(i,j)] = ['D','R','L']
                         self.allowable_action_idxs[(i,j)] = [1,2,3]
-                    if i == self.n_dim-1 and j != 0 and j != self.n_dim-1:
+                    if i == self.D_in-1 and j != 0 and j != self.D_in-1:
                         self.allowable_actions[(i,j)] = ['U','R','L']
                         self.allowable_action_idxs[(i,j)] = [0,2,3]
-                    if j == 0 and i != 0 and i != self.n_dim-1:
+                    if j == 0 and i != 0 and i != self.D_in-1:
                         self.allowable_actions[(i,j)] = ['U','D','R']
                         self.allowable_action_idxs[(i,j)] = [0,1,2]
-                    if j == self.n_dim-1 and i != 0 and i != self.n_dim-1:
+                    if j == self.D_in-1 and i != 0 and i != self.D_in-1:
                         self.allowable_actions[(i,j)] = ['U','D','L']
                         self.allowable_action_idxs[(i,j)] = [0,1,3]
                     if i == 0 and j == 0:
                         self.allowable_actions[(i,j)] = ['D','R']
                         self.allowable_action_idxs[(i,j)] = [1,2]
-                    if i == self.n_dim-1 and j == 0:
+                    if i == self.D_in-1 and j == 0:
                         self.allowable_actions[(i,j)] = ['U','R']
                         self.allowable_action_idxs[(i,j)] = [0,2]
-                    if j == self.n_dim-1 and i == 0:
+                    if j == self.D_in-1 and i == 0:
                         self.allowable_actions[(i,j)] = ['D','L']
                         self.allowable_action_idxs[(i,j)] = [1,3]
-                    if j == self.n_dim-1 and i == self.n_dim-1:
+                    if j == self.D_in-1 and i == self.D_in-1:
                         self.allowable_actions[(i,j)] = ['U','L']
                         self.allowable_action_idxs[(i,j)] = [0,3]
 
@@ -106,9 +107,9 @@ class Gridworld: # Environment
         self.current_target_goal = self.current_objects[0]
 
     def create_objects(self):
-        a = np.arange(self.min_num, self.max_num+1)
-        objects_np = np.random.choice(a, size=self.n_obj, replace=False, p=None)
-        objects = torch.from_numpy(objects_np)
+        arr = np.arange(self.min_num, self.max_num+1)
+        objects = np.random.choice(arr, size=self.n_obj, replace=False, p=None)
+        objects = [int(element) for element in objects]   
         objects = list(objects)
         objects.sort(reverse=False)
         return objects
@@ -119,7 +120,7 @@ class Gridworld: # Environment
         -store the object's indexes
         -places the agent
         '''
-        small_matrix_dim = (self.n_dim+1)/2
+        small_matrix_dim = (self.D_in+1)/2
         a = np.arange(0,small_matrix_dim**2, dtype=int)
         idx_1d = np.random.choice(a, size=self.n_obj, replace=False, p=None)
         idx_2d = [[2*math.floor(idx/small_matrix_dim), 2*int(idx%small_matrix_dim)] for idx in idx_1d]
@@ -133,7 +134,7 @@ class Gridworld: # Environment
         # the function creates the same gridworld as the original
         self.agent_loc[0,:] = self.start[0,:]
         self.grid_mat = copy.deepcopy(self.grid_mat_original)
-        # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.n_dim*self.n_dim)) # 1D array
+        # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.D_in*self.D_in)) # 1D array
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
         self.current_target_goal = None
@@ -144,16 +145,15 @@ class Gridworld: # Environment
         self.original_objects = self.create_objects()
         self.object_idxs = self.place_objects()
         self.grid_mat_original = copy.deepcopy(self.grid_mat)
-        # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.n_dim*self.n_dim)) # 1D array
+        # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.D_in*self.D_in)) # 1D array
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
         self.current_target_goal = None
         return self.start, self.grid_mat
 
-    def remove_occupied_object(self):
-        self.grid_mat[self.agent_loc[0,0], self.agent_loc[0,1]] = 0
+    def remove_object(self, i, j):
+        self.grid_mat[i,j] = 0
         self.current_objects.pop(0)
-        # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.n_dim*self.n_dim)) # 1D array
 
     def set_state(self, s):
         self.agent_loc[0,:] = s[0,:]
@@ -164,10 +164,12 @@ class Gridworld: # Environment
     def current_state(self):
         return self.agent_loc
 
-    def take_action(self, action_idx):
+    def step(self, action_idx):
+        i = self.agent_loc[0,0].item()
+        j = self.agent_loc[0,1].item()
         action = self.all_actions[action_idx]
     # check if legal move first, if not, nothing happens!
-        if action in self.allowable_actions[(self.agent_loc[0,0], self.agent_loc[0,1])]:
+        if action in self.allowable_actions[(i,j)]:
             if   action == 'U':
                 self.agent_loc[0,0] += -1
             elif action == 'L':
@@ -177,38 +179,36 @@ class Gridworld: # Environment
             elif action == 'R':
                 self.agent_loc[0,1] += 1
 
-            reward = self.extrinsic_reward(self.agent_loc)
+            self.extr_reward(self.agent_loc)
         else:
             # this part should never be executed if the actions are only picked amont the allowable actions
             reward = self.not_moving_reward
 
-        return reward, self.agent_loc, self.grid_mat
+        return self.agent_loc, self.grid_mat
 
-    def int_critique(self, agent_state, goal):
+    def int_reward(self, agent_state, meta_goal):
         i = agent_state[0,0]
         j = agent_state[0,1]
-        element = self.grid_mat[i,j]
-        goal_reached = False
+        element = self.grid_mat[i,j].item()
 
         if element == 0:
             reward = self.int_step_reward
-        elif element == goal:
+        elif element == meta_goal:
             reward = self.int_goal_reward
-            goal_reached = True
         else:
             reward = self.int_wrong_goal_reward
             
-        return reward, goal_reached
+        return reward
 
-    def extrinsic_reward(self, agent_state):
+    def extr_reward(self, agent_state):
         i = agent_state[0,0]
         j = agent_state[0,1]
         num_goals_left = len(self.current_objects)
         final_goal = False
         if num_goals_left == 1:
-            final_goal = True    
+            final_goal = True
 
-        element = self.grid_mat[i,j]
+        element = self.grid_mat[i,j].item()
         if element == 0:
             reward = self.step_reward
         else:
@@ -237,13 +237,13 @@ class Gridworld: # Environment
         # should never happen
         assert(self.current_state() in self.all_states())
 
-    def is_terminal(self, state):
+    def is_terminal(self, agent_state):
         # it is terminal either when it's game over or it has solved the game
         
-        i = state[0,0]
-        j = state[0,1]
+        i = agent_state[0,0]
+        j = agent_state[0,1]
         num_goals_left = len(self.current_objects)
-        element = self.grid_mat[i,j]
+        element = self.grid_mat[i,j].item()
         game_won = False
         game_over = False
 
