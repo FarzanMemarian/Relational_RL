@@ -28,7 +28,7 @@ default_batch_size = 1000
 default_gamma = 0.975
 default_epsilon = 1.0
 default_tau = 0.001
-default_memory_size = 10000
+default_cntr_memory_size = 10000
 
 
 class cntr_class(nn.Module):
@@ -94,6 +94,25 @@ class meta_class(nn.Module):
             num_features *= s
         return num_features
 
+class ReplayMemory(object):
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.memory = []
+        self.position = 0
+
+    def push(self, exp):
+        """Saves a transition."""
+        if len(self.memory) < self.capacity:
+            self.memory.append(None)
+        self.memory[self.position] = exp
+        self.position = (self.position + 1) % self.capacity
+
+    def sample(self, batch_size):
+        return random.sample(self.memory, batch_size)
+
+    def __len__(self):
+        return len(self.memory)
 
 class hDQN:
 
@@ -105,7 +124,7 @@ class hDQN:
                 meta_epsilon=default_meta_epsilon, 
                 epsilon=default_epsilon, 
                 tau = default_tau,
-                memory_size = default_memory_size,
+                cntr_memory_size = default_cntr_memory_size,
                 meta_memory_size = default_meta_memory_size):
 
         self.env = env
@@ -118,10 +137,11 @@ class hDQN:
         self.gamma = gamma
         self.target_tau = tau
         
-        self.memory = []
-        self.meta_memory = []
-        self.memory_size = memory_size
-        self.meta_memory_size = meta_memory_size
+        self.cntr_memory_size = cntr_memory_size
+        self.meta_memory_size = meta_memory_size        
+        self.cntr_memory = ReplayMemory(self.cntr_memory_size)
+        self.meta_memory = ReplayMemory(self.meta_memory_size)
+
         
         self.policy_meta_net = meta_class()
         self.target_meta_net = meta_class()
@@ -147,19 +167,18 @@ class hDQN:
                     Q.append(pred.item())
                 goal_idx = np.argmax(Q)
                 goal = self.env.current_objects[goal_idx]
-        else:
-            print("Exploring")
-            goal = self.random_goal_selection()
 
+        else:
+            print("Exploring ...............")
+            goal = self.random_goal_selection()
         # update environment
         self.env.selected_goals.append(goal)
-        self.env.update_target_goal()
         return goal
 
     def random_goal_selection(self):
         # Don't call this function directly, it would always be called from select_goal()
         goal_idx = int(np.random.choice(len(self.env.current_objects)))
-        goal = self.env.original_objects[goal_idx]
+        goal = self.env.current_objects[goal_idx]
         return goal
 
 
@@ -198,25 +217,23 @@ class hDQN:
 
     def store(self, experience, meta=False):
         if meta:
-            self.meta_memory.append(experience)
-            if len(self.meta_memory) > self.meta_memory_size:
-                self.meta_memory = self.meta_memory[-self.meta_memory_size:]
+            self.meta_memory.push(experience)
+
         else:
-            self.memory.append(experience)
-            if len(self.memory) > self.memory_size:
-                self.memory = self.memory[-self.memory_size:]
+            self.cntr_memory.push(experience)
+
 
     def Q_cntr(self, cntr_input, target):
         if target:
             try:
-                Q_policys = self.target_cntr_net(cntr_input)
+                Q_policys = self.target_cntr_net(cntr_input) 
             except Exception as e:
                 cntr_input = torch.unsqueeze(cntr_input, dim=0)
-                Q_policys = self.target_cntr_net(cntr_input)
+                Q_policys = self.target_cntr_net(cntr_input) 
             return Q_policys, cntr_input
         else:
             try:
-                Q_policys = self.policy_cntr_net(cntr_input)
+                Q_policys = self.policy_cntr_net(cntr_input) 
             except Exception as e:
                 cntr_input = torch.unsqueeze(cntr_input, dim=0)
                 Q_policys = self.policy_cntr_net(cntr_input)
@@ -241,11 +258,11 @@ class hDQN:
 
 
     def _update_cntr(self):
-        if len(self.memory) < 10:
+        if len(self.cntr_memory) < self.batch_size:
             return
 
-        sample_size = min(self.batch_size, len(self.memory))
-        exps = [random.choice(self.memory) for _ in range(sample_size)]
+        sample_size = min(self.batch_size, len(self.cntr_memory))
+        exps = self.cntr_memory.sample(sample_size)
         
         state_tensors = torch.cat([torch.unsqueeze(exp.agent_env_goal_cntr, 0) for exp in exps])
         non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.cntr_done for exp in exps])))
@@ -270,6 +287,7 @@ class hDQN:
         except:
             print("Q targets problems...")
             set_trace()
+
         Q_targets = torch.unsqueeze(Q_targets, 1)
 
         self.cntr_optimizer.zero_grad()
@@ -287,13 +305,12 @@ class hDQN:
     def _update_meta(self):
         # ["agent_env_state_0", "goal", "reward", "next_agent_env_state", "next_available_goals", "done"]
 
-        if len(self.meta_memory) < 10:
+        if len(self.meta_memory) <= 5:
             return
-        
+
         sample_size = min(self.meta_batch_size, len(self.meta_memory))
-        exps = [random.choice(self.meta_memory) for _ in range(sample_size)]
-        set_trace()
-        
+        exps = self.meta_memory.sample(sample_size)
+        # exps = self.meta_memory[-sample_size:]
         D_in = self.env.D_in
         state_tensors = torch.cat([torch.unsqueeze(utils.meta_input2(D_in, exp.agent_env_state_0, 
                             exp.goal), 0) for exp in exps])
@@ -302,10 +319,10 @@ class hDQN:
 
         reward_batch = torch.tensor([exp.reward for exp in exps], dtype=torch.float32)
 
-        # non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.done for exp in exps])))
+        # non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.terminal for exp in exps])))
         # try:
         #     next_state_non_terminals = torch.cat([torch.unsqueeze(utils.meta_input2(D_in, 
-        #         exp.next_agent_env_state, exp.goal), 0) for exp in exps if exp.done != True])
+        #         exp.next_agent_env_state, exp.goal), 0) for exp in exps if exp.terminal != True])
         #     next_state_Vs = self.Q_meta(next_state_non_terminals, target=True)[0].detach()
         # except:
         #     pass
@@ -321,9 +338,9 @@ class hDQN:
         Q_targets[:,0] = reward_batch
 
         for i, exp in enumerate(exps):
-            if not exp.done:
+            if not exp.terminal:
                 # this block finds the max Q in the next state for this particular experiment
-                # if exp.done is true, it means that the next state is terminal and we have 
+                # if exp.terminal is true, it means that the next state is terminal and we have 
                 # Q(s,.)=0 if s is terminal 
                 
                 try:
@@ -337,6 +354,7 @@ class hDQN:
                     print("PROBLEM")
                     print("PROBLEM")
                     set_trace()
+                    print("stop here")
 
                 next_state_V = max(self.Q_meta(intermediate_tensor, target=True)[0]).item()
                 Q_targets[i,0] +=  self.gamma * (next_state_V)

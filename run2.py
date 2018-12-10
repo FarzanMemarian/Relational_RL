@@ -44,14 +44,14 @@ def init():
     int_wrong_goal_reward = -200
 
     # PARAMETERS OF MEATA cntr
-    meta_batch_size = 15
-    meta_epsilon = 0.2
+    meta_batch_size = 10
+    meta_epsilon = 1
     meta_memory_size = 10000
 
     # PARAMETERS OF THE cntr
-    batch_size = 15
+    batch_size = 10
     gamma = 0.975
-    epsilon = 0.2
+    epsilon = 1
     tau = 0.001
     memory_size = 10000
 
@@ -81,18 +81,18 @@ def init():
                 memory_size = memory_size,
                 meta_memory_size = meta_memory_size)
 
-    return env, agent, num_thousands, num_epis
+    return env, agent, num_epis
 
-def train_HRL(env, agent, num_thousands=12, num_epis=10):
+def train_HRL(env, agent, num_epis=10):
 
     cntrExperience = namedtuple("cntrExperience", 
         ["agent_env_goal_cntr", "action_idx", "int_reward", "next_agent_env_goal_cntr", "goal", 
         "next_available_actions", "cntr_done"])
     MetaExperience = namedtuple("MetaExperience",   
-        ["agent_env_state_0", "goal", "reward", "next_agent_env_state", "next_available_goals", "done"])
-
-    visits = np.zeros((num_thousands, env.D_in, env.D_in))
-    anneal_factor = (1.0-0.1)/(num_thousands * num_epis)
+        ["agent_env_state_0", "goal", "reward", "next_agent_env_state", 
+        "next_available_goals", "terminal", "episode"])
+    visits = np.zeros((env.D_in, env.D_in))
+    anneal_factor = (1.0-0.1)/(num_epis)
     print("Annealing factor: " + str(anneal_factor))
     game_won_counter = 0
     game_over_counter = 0
@@ -100,12 +100,12 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
         agent_state, env_state = env.reset() 
-        visits[episode_thousand, agent_state[0,0].item(), agent_state[0,1].item()] += 1
+        visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
         while not terminal:  # this loop is for meta-cntr, while state not terminal
             meta_goal = agent.select_goal(agent_state)  # meta cntr selects a goal
             # agent.goal_selected[goal_idx] += 1
-            print("\nNew Goal: "  + str(meta_goal) + "\nState-Actions: ")
+            print("\nNew Goal: "  + str(meta_goal) + "\n")
             total_extr_reward = 0
             agent_env_state_0 = utils.agent_env_state(agent_state, env_state) # for meta controller start state
             meta_goal_reached = False
@@ -117,28 +117,35 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
                 int_reward = env.int_reward(next_agent_state, meta_goal)
                 
                 i, j = next_agent_state[0,0].item(), next_agent_state[0,1].item()
-                visits[episode_thousand, i, j] += 1
-                current_element = env.grid_mat[i,j].item()
+                visits[i, j] += 1
+                current_element = int(env.grid_mat[i,j].item())
                 meta_goal_reached = current_element == meta_goal
+                current_target_reached = current_element == env.current_target_goal
                 # print ("action ----> "  + action)
                 # print ("state after action ----> " + "[" + str(i) +", " + 
                 #         str(j) + "]" )
                 # print ("---------------------")
-                game_over = env.is_terminal(next_agent_state)[0]
-                game_won = env.is_terminal(next_agent_state)[1]
-                terminal = game_over or game_won # terminal refers to next state 
-                
+                game_over, game_won = env.is_terminal(next_agent_state)
+                terminal = game_over or game_won # terminal refers to next state
 
-                if current_element == env.current_target_goal:
+                if current_target_reached:
+                    print("CURRENT TARGET REACHED! ")
+                    print("the object reached : " + str(current_element))
+                    print("the current target : " + str(env.current_target_goal))
+                    print ("original objects: {}".format(env.original_objects))
+                    removed_object = env.remove_object(i,j)
+                    env.update_target_goal()
                     # object will only be removed if it's the right object to be picked up
                     # else the game ends and it doesn't matter what the remaining objects are
-                    env.remove_object(i,j)
-
+                    print ("object {} removed <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(removed_object))     
+                    print ("current objects: {}".format(env.current_objects))
+                    print ("********************") 
+                
                 if meta_goal_reached:
                     # agent.goal_success[goal_idx] += 1
                     print("SELECTED GOAL REACHED! ")
-                    print("the object reached which should equal the selected goal: " + 
-                        str(current_element))
+                    print("the object reached : " + str(current_element))
+                    print("the meta goal : " + str(meta_goal))
                     print ("original objects: {}".format(env.original_objects))
                     print ("current objects: {}".format(env.current_objects))
                     print ("********************")
@@ -168,30 +175,32 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
                 # if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
                 cntr_done = meta_goal_reached or terminal # note that cntr_done refers 
-                                                                    # to next stat
-                
+                                                                    # to next state
                 agent_env_goal_cntr = utils.cntr_input(env.D_in, agent_state, env_state, meta_goal)
                 next_agent_env_goal_cntr = utils.cntr_input(env.D_in, next_agent_state, next_env_state, meta_goal)
-                next_available_goals = env.current_objects
                 next_available_actions = env.allowable_actions[i,j]
 
                 # if the state is terminal, the experiment will not even be added to the cntrExperience
                 # or the MetaEcperience, only the next_state can be terminal
-                exp = cntrExperience(agent_env_goal_cntr, action_idx, int_reward,  
+                exp_cntr = cntrExperience(agent_env_goal_cntr, action_idx, int_reward,  
                     next_agent_env_goal_cntr, meta_goal, next_available_actions, cntr_done)
-                agent.store(exp, meta=False)
+                agent.store(exp_cntr, meta=False)
                 agent.update(meta=False)
                 agent.update(meta=True)
                 total_extr_reward += extr_reward
                 agent_state = next_agent_state
                 env_state = next_env_state
             next_agent_env_state = utils.agent_env_state(agent_state, env_state)
-            exp = MetaExperience(agent_env_state_0, meta_goal, total_extr_reward, next_agent_env_state, 
-                next_available_goals, terminal)
-            agent.store(exp, meta=True)
+            next_available_goals = env.current_objects
+
+            print ("the length of available goals {} *******************************".format(len(next_available_goals)))
+            print ("terminal?    {}".format(terminal))
+            exp_meta = MetaExperience(agent_env_state_0, meta_goal, total_extr_reward, next_agent_env_state, 
+                next_available_goals, terminal, episode)
+            agent.store(exp_meta, meta=True)
             # set_trace()
 
-            #Annealing 
+            # Annealing 
             agent.meta_epsilon -= anneal_factor
             agent.epsilon -= anneal_factor
             # avg_success_rate = agent.goal_success[goal_idx] / agent.goal_selected[goal_idx]
@@ -210,6 +219,7 @@ def train_HRL(env, agent, num_thousands=12, num_epis=10):
         print("meta_epsilon: " + str(agent.meta_epsilon))
         print("epsilon: " + str(agent.epsilon))
 
+    set_trace()
     print("SAVING THE LOG FILES .........")
     with open("logs/logs.txt", "w") as file:
         file.write("game_won_counter: {}\n".format(game_won_counter)) 
@@ -354,8 +364,8 @@ def train_cntr(env, agent):
 
 def main():
 
-    env, agent, num_thousands, num_epis = init()
-    train_HRL(env, agent, num_thousands, num_epis)
+    env, agent, num_epis = init()
+    train_HRL(env, agent, num_epis)
     # set_trace()
     # train_cntr(env, agent)
     

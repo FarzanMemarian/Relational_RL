@@ -52,7 +52,7 @@ class Gridworld: # Environment
         # self.grid_flat = np.ravel(self.grid_mat).reshape((1,-1)) # 1D array
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
-        self.current_target_goal = None
+        self.current_target_goal = self.current_objects[0]
 
         # actions
         self.allowable_actions = {}
@@ -104,7 +104,8 @@ class Gridworld: # Environment
                         self.allowable_action_idxs[(i,j)] = [0,3]
 
     def update_target_goal(self):
-        self.current_target_goal = self.current_objects[0]
+        if self.current_objects:
+            self.current_target_goal = self.current_objects[0]
 
     def create_objects(self):
         arr = np.arange(self.min_num, self.max_num+1)
@@ -137,7 +138,7 @@ class Gridworld: # Environment
         # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.D_in*self.D_in)) # 1D array
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
-        self.current_target_goal = None
+        self.current_target_goal = self.current_objects[0]
         return self.start, self.grid_mat
 
     def reset2(self): # whole gridworld is created from the beginning. 
@@ -148,12 +149,13 @@ class Gridworld: # Environment
         # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.D_in*self.D_in)) # 1D array
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
-        self.current_target_goal = None
+        self.current_target_goal = self.current_objects[0]
         return self.start, self.grid_mat
 
     def remove_object(self, i, j):
         self.grid_mat[i,j] = 0
-        self.current_objects.pop(0)
+        return self.current_objects.pop(0)
+
 
     def set_state(self, s):
         self.agent_loc[0,:] = s[0,:]
@@ -193,22 +195,23 @@ class Gridworld: # Environment
 
         if element == 0:
             reward = self.int_step_reward
-        elif element == meta_goal:
-            reward = self.int_goal_reward
         else:
-            reward = self.int_wrong_goal_reward
-            
+            if element == meta_goal:
+                reward = self.int_goal_reward
+            else:
+                reward = self.int_wrong_goal_reward
         return reward
 
     def extr_reward(self, agent_state):
         i = agent_state[0,0]
         j = agent_state[0,1]
+        element = self.grid_mat[i,j].item()
+
         num_goals_left = len(self.current_objects)
         final_goal = False
         if num_goals_left == 1:
             final_goal = True
-
-        element = self.grid_mat[i,j].item()
+        
         if element == 0:
             reward = self.step_reward
         else:
