@@ -15,6 +15,7 @@ import torch.optim as optim
 import sys
 sys.path.append('../')
 from envs.gridworld1 import Gridworld
+from src import transformer
 from utils import utils
 from pdb import set_trace
 
@@ -37,7 +38,7 @@ class cntr_class(nn.Module):
         super().__init__()
         # 1 input image channel, 6 output channels, 5x5 square convolution
         # kernel
-        self.conv1 = nn.Conv2d(2, 6, kernel_size=2)
+        self.conv1 = nn.Conv2d(2,  6, kernel_size=2)
         self.pool = nn.MaxPool2d(2,2)
         self.conv2 = nn.Conv2d(6, 16, kernel_size=2)
         # an affine operation: y = Wx + b

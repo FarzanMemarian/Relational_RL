@@ -3,8 +3,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import namedtuple
-from envs.gridworld2 import Gridworld
-from agent.agent2 import hDQN
+import sys
+sys.path.append('../')
+from envs.gridworld3 import Gridworld
+from agent.agent3 import hDQN
+import transformer
 from utils import utils
 import copy
 
@@ -20,14 +23,14 @@ plt.style.use('ggplot')
 
 def init():
     # TRAIN HRL PARAMS
-    num_epis = 100
+    num_epis = 1000
 
     # GRID WORLD GEOMETRICAL PARAMETERS
     D_in = 5 # pick odd numbers
     start = torch.zeros([1,2], dtype=torch.int)
     start[0,0] = 0
     start[0,1] = 1
-    n_obj = 2
+    n_obj = 3
     min_num = 1
     max_num = 30
 
@@ -44,16 +47,24 @@ def init():
     int_wrong_goal_reward = -200
 
     # PARAMETERS OF MEATA cntr
-    meta_batch_size = 10
+    meta_batch_size = 30
     meta_epsilon = 1
     meta_memory_size = 10000
 
     # PARAMETERS OF THE cntr
-    batch_size = 10
+    batch_size = 30
     gamma = 0.975
     epsilon = 1
     tau = 0.001
-    memory_size = 10000
+    cntr_memory_size = 10000
+
+
+    cntr_Transition = namedtuple("cntr_Transition", 
+        ["agent_env_goal_cntr", "action_idx", "int_reward", "next_agent_env_goal_cntr", "goal", 
+        "next_available_actions", "cntr_done"])
+    meta_Transition = namedtuple("meta_Transition",   
+        ["agent_env_state_0", "goal", "reward", "next_agent_env_state", 
+        "next_available_goals", "terminal", "meta_exp_counter"])
 
     # create and initialize the environment   
     env = Gridworld(D_in, 
@@ -78,39 +89,46 @@ def init():
                 meta_epsilon=meta_epsilon, 
                 epsilon=epsilon, 
                 tau = tau,
-                memory_size = memory_size,
+                cntr_Transition = cntr_Transition,
+                cntr_memory_size = cntr_memory_size,
+                meta_Transition = meta_Transition,
                 meta_memory_size = meta_memory_size)
 
     return env, agent, num_epis
 
 def train_HRL(env, agent, num_epis=10):
 
-    cntrExperience = namedtuple("cntrExperience", 
-        ["agent_env_goal_cntr", "action_idx", "int_reward", "next_agent_env_goal_cntr", "goal", 
-        "next_available_actions", "cntr_done"])
-    MetaExperience = namedtuple("MetaExperience",   
-        ["agent_env_state_0", "goal", "reward", "next_agent_env_state", 
-        "next_available_goals", "terminal", "episode"])
+
     visits = np.zeros((env.D_in, env.D_in))
     anneal_factor = (1.0-0.1)/(num_epis)
     print("Annealing factor: " + str(anneal_factor))
     game_won_counter = 0
     game_over_counter = 0
     game_result_history = []
+    meta_exp_counter = 0
+    cntr_success = namedtuple("cntr_logs", ["num_steps","meta_goal_reached"])
+    hdqn_success = namedtuple("hdqn_logs", ["num_steps","won"])
+    cntr_success_list = []
+    hdqn_success_list = []
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
         agent_state, env_state = env.reset() 
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
-        while not terminal:  # this loop is for meta-cntr, while state not terminal
+        episode_steps = 0
+        while not terminal:  # this loop is for meta-cntr
+                             # which means while the game is not lost or won
             meta_goal = agent.select_goal(agent_state)  # meta cntr selects a goal
             # agent.goal_selected[goal_idx] += 1
             print("\nNew Goal: "  + str(meta_goal) + "\n")
             total_extr_reward = 0
             agent_env_state_0 = utils.agent_env_state(agent_state, env_state) # for meta controller start state
             meta_goal_reached = False
+            cntr_steps = 0
             while not terminal and not meta_goal_reached: # this loop is for meta, while state not terminal
-                action_idx, action = agent.select_action(agent_state, meta_goal) # cntr selects an action among permitable actions
+                cntr_steps += 1
+                episode_steps += 1
+                action_idx, action = agent.select_action(agent_state, env_state, meta_goal) # cntr selects an action among permitable actions
                 # print(str((state,action)) + "; ")
                 next_agent_state, next_env_state = env.step(action_idx) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
                 extr_reward = env.extr_reward(next_agent_state)
@@ -180,24 +198,34 @@ def train_HRL(env, agent, num_epis=10):
                 next_agent_env_goal_cntr = utils.cntr_input(env.D_in, next_agent_state, next_env_state, meta_goal)
                 next_available_actions = env.allowable_actions[i,j]
 
-                # if the state is terminal, the experiment will not even be added to the cntrExperience
+                # if the state is terminal, the experiment will not even be added to the cntr_Transition
                 # or the MetaEcperience, only the next_state can be terminal
-                exp_cntr = cntrExperience(agent_env_goal_cntr, action_idx, int_reward,  
-                    next_agent_env_goal_cntr, meta_goal, next_available_actions, cntr_done)
-                agent.store(exp_cntr, meta=False)
+                exp_cntr = copy.deepcopy([agent_env_goal_cntr, action_idx, int_reward,  
+                    next_agent_env_goal_cntr, meta_goal, next_available_actions, cntr_done])
+                # agent.store(*exp_cntr, meta=False)
                 agent.update(meta=False)
                 agent.update(meta=True)
                 total_extr_reward += extr_reward
                 agent_state = next_agent_state
                 env_state = next_env_state
+
+            cntr_success_list.append(cntr_success(cntr_steps, meta_goal_reached))
+
             next_agent_env_state = utils.agent_env_state(agent_state, env_state)
             next_available_goals = env.current_objects
 
-            print ("the length of available goals {} *******************************".format(len(next_available_goals)))
-            print ("terminal?    {}".format(terminal))
-            exp_meta = MetaExperience(agent_env_state_0, meta_goal, total_extr_reward, next_agent_env_state, 
-                next_available_goals, terminal, episode)
-            agent.store(exp_meta, meta=True)
+            # print ("next available goals {} *******************************".format(
+            #     next_available_goals))
+            # print ("terminal?    {}".format(terminal))
+            meta_exp_counter += 1 
+            exp_meta = copy.deepcopy([agent_env_state_0, meta_goal, total_extr_reward, next_agent_env_state, 
+                next_available_goals, terminal, meta_exp_counter])
+            # if not terminal and len(next_available_goals) == 1:
+            #     print ("next available goals {} *******************************".format(
+            #     next_available_goals))
+            #     print ("terminal?    {}".format(terminal))
+            #     set_trace()
+            agent.store(*exp_meta, meta=True)
             # set_trace()
 
             # Annealing 
@@ -216,63 +244,73 @@ def train_HRL(env, agent, num_epis=10):
                 agent.epsilon = 0.1
 
 
+        hdqn_success_list.append(hdqn_success(episode_steps, game_won))
         print("meta_epsilon: " + str(agent.meta_epsilon))
         print("epsilon: " + str(agent.epsilon))
 
-    set_trace()
-    print("SAVING THE LOG FILES .........")
-    with open("logs/logs.txt", "w") as file:
-        file.write("game_won_counter: {}\n".format(game_won_counter)) 
-        file.write("game_over_counter: {}\n".format(game_over_counter))
 
-    with open("logs/game_result_history.txt", "w") as file:
-        for game in game_result_history:
-            # item = game + "\n"
-            item = str(game) + "\n"
-            file.write(item)
+        if episode >= 10 and episode % 10 == 0:
+            print("SAVING THE LOG FILES .........")
+            with open("logs/logs.txt", "w") as file:
+                file.write("game_won_counter: {}\n".format(game_won_counter)) 
+                file.write("game_over_counter: {}\n".format(game_over_counter))
 
-    with open("logs/game_result_history.pickle","wb") as file:
-        pickle.dump(game_result_history, file)
+            with open("logs/game_result_history.txt", "w") as file:
+                for game in game_result_history:
+                    # item = game + "\n"
+                    item = str(game) + "\n"
+                    file.write(item)
 
+            set_trace()
+            with open("logs/game_result_history.pickle","wb") as file:
+                pickle.dump(game_result_history, file)
 
-    print ("SAVING THE MODELS .............")  
-    print ()
-    # serialize model to JSON
-    model_json = agent.meta_cntr.to_json()
-    with open("saved_models/meta_cntr.json", "w") as json_file:
-        json_file.write(model_json)
-    # serialize weights to HDF5
-    agent.meta_cntr.save_weights("saved_models/meta_cntr.h5")
-    print("Saved model to disk")
+            with open("logs/hdqn_success_list.pickle", "wb") as file:
+                pickle.dump(hdqn_success_list, file)
 
-    # serialize model to JSON
-    model_json = agent.target_meta_cntr.to_json()
-    with open("saved_models/target_meta_cntr.json", "w") as json_file:
-        json_file.write(model_json)
-    # serialize weights to HDF5
-    agent.target_meta_cntr.save_weights("saved_models/target_meta_cntr.h5")
-    print("Saved model to disk")
+            with open("logs/cntr_success_list.pickle", "wb") as file:
+                pickle.dump(cntr_success_list, file)
 
-    # serialize model to JSON
-    model_json = agent.cntr.to_json()
-    with open("saved_models/cntr.json", "w") as json_file:
-        json_file.write(model_json)
-    # serialize weights to HDF5
-    agent.cntr.save_weights("saved_models/cntr.h5")
-    print("Saved model to disk")
+            set_trace()
 
-  
-    model_json = agent.target_cntr.to_json()
-    with open("saved_models/target_cntr.json", "w") as json_file:
-        json_file.write(model_json)
-    # serialize weights to HDF5
-    agent.meta_cntr.save_weights("saved_models/target_cntr.h5")
-    print("Saved model to disk")
+            print ("SAVING THE MODELS .............")  
+            print ()
+            # serialize model to JSON
+            model_json = agent.meta_cntr.to_json()
+            with open("saved_models/meta_cntr.json", "w") as json_file:
+                json_file.write(model_json)
+            # serialize weights to HDF5
+            agent.meta_cntr.save_weights("saved_models/meta_cntr.h5")
+            print("Saved model to disk")
+
+            # serialize model to JSON
+            model_json = agent.target_meta_cntr.to_json()
+            with open("saved_models/target_meta_cntr.json", "w") as json_file:
+                json_file.write(model_json)
+            # serialize weights to HDF5
+            agent.target_meta_cntr.save_weights("saved_models/target_meta_cntr.h5")
+            print("Saved model to disk")
+
+            # serialize model to JSON
+            model_json = agent.cntr.to_json()
+            with open("saved_models/cntr.json", "w") as json_file:
+                json_file.write(model_json)
+            # serialize weights to HDF5
+            agent.cntr.save_weights("saved_models/cntr.h5")
+            print("Saved model to disk")
+
+          
+            model_json = agent.target_cntr.to_json()
+            with open("saved_models/target_cntr.json", "w") as json_file:
+                json_file.write(model_json)
+            # serialize weights to HDF5
+            agent.meta_cntr.save_weights("saved_models/target_cntr.h5")
+            print("Saved model to disk")
 
 
 def train_cntr(env, agent):
 
-    cntrExperience = namedtuple("cntrExperience", 
+    cntr_Transition = namedtuple("cntr_Transition", 
         ["agent_state", "goal", "action", "reward", "next_agent_state", "done"])
     num_epis = 1000
     anneal_factor = (1.0-0.1)/(num_epis)
@@ -322,7 +360,7 @@ def train_cntr(env, agent):
                     print ("original objects: {}".format(env.original_objects))                        
                     print("********************")
                 
-                exp = cntrExperience(agent_state, goal, action_idx, int_reward, 
+                exp = cntr_Transition(agent_state, goal, action_idx, int_reward, 
                                             next_agent_state, meta_goal_reached)
                 agent.store(exp, meta=False)
                 agent.update(meta=False)
