@@ -23,7 +23,7 @@ plt.style.use('ggplot')
 
 def init():
     # TRAIN HRL PARAMS
-    num_epis = 1000
+    num_epis = 10000
 
     # GRID WORLD GEOMETRICAL PARAMETERS
     D_in = 5 # pick odd numbers
@@ -32,7 +32,7 @@ def init():
     start[0,1] = 1
     n_obj = 3
     min_num = 1
-    max_num = 30
+    max_num = 10
 
     # extr REWARDS
     not_moving_reward = -1
@@ -96,7 +96,7 @@ def init():
 
     return env, agent, num_epis
 
-def train_HRL(env, agent, num_epis=10):
+def train_HRL(env, agent, num_epis=100):
 
 
     visits = np.zeros((env.D_in, env.D_in))
@@ -106,10 +106,8 @@ def train_HRL(env, agent, num_epis=10):
     game_over_counter = 0
     game_result_history = []
     meta_exp_counter = 0
-    cntr_success = namedtuple("cntr_logs", ["num_steps","meta_goal_reached"])
-    hdqn_success = namedtuple("hdqn_logs", ["num_steps","won"])
-    cntr_success_list = []
-    hdqn_success_list = []
+    cntr_logs_list = [] # each element should be [cntr_steps, meta_goal_reached]
+    hdqn_logs_list = [] # each slement should be [episode_steps, game_won]
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
         agent_state, env_state = env.reset() 
@@ -209,7 +207,7 @@ def train_HRL(env, agent, num_epis=10):
                 agent_state = next_agent_state
                 env_state = next_env_state
 
-            cntr_success_list.append(cntr_success(cntr_steps, meta_goal_reached))
+            cntr_logs_list.append([cntr_steps, meta_goal_reached])
 
             next_agent_env_state = utils.agent_env_state(agent_state, env_state)
             next_available_goals = env.current_objects
@@ -241,72 +239,48 @@ def train_HRL(env, agent, num_epis=10):
             if(agent.epsilon < 0.1):
                 agent.epsilon = 0.1
             if(agent.meta_epsilon) < 0.1:
-                agent.epsilon = 0.1
+                agent.meta_epsilon = 0.1
 
 
-        hdqn_success_list.append(hdqn_success(episode_steps, game_won))
+        hdqn_logs_list.append([episode_steps, game_won])
         print("meta_epsilon: " + str(agent.meta_epsilon))
         print("epsilon: " + str(agent.epsilon))
 
-
-        if episode >= 10 and episode % 10 == 0:
+        if episode != 0 and episode % 9 == 0:
             print("SAVING THE LOG FILES .........")
-            with open("logs/logs.txt", "w") as file:
+            with open("../logs/logs.txt", "w") as file:
                 file.write("game_won_counter: {}\n".format(game_won_counter)) 
                 file.write("game_over_counter: {}\n".format(game_over_counter))
 
-            with open("logs/game_result_history.txt", "w") as file:
+            with open("../logs/game_result_history.txt", "w") as file:
                 for game in game_result_history:
                     # item = game + "\n"
                     item = str(game) + "\n"
                     file.write(item)
 
-            set_trace()
-            with open("logs/game_result_history.pickle","wb") as file:
+            with open("../logs/game_result_history.pickle","wb") as file:
                 pickle.dump(game_result_history, file)
 
-            with open("logs/hdqn_success_list.pickle", "wb") as file:
-                pickle.dump(hdqn_success_list, file)
+            # *******************************************************
+            with open("../logs/hdqn_logs_list.txt", "w") as file:
+                for line in hdqn_logs_list:
+                    file.write(str(line[0]) + "   " +  str(line[1]) + "\n")
+            with open("../logs/cntr_logs_list.txt", "w") as file:
+                for line in cntr_logs_list:
+                    file.write(str(line[0]) + "   " +  str(line[1]) + "\n")
 
-            with open("logs/cntr_success_list.pickle", "wb") as file:
-                pickle.dump(cntr_success_list, file)
+            with open("../logs/hdqn_logs_list.pickle", "wb") as file:
+                pickle.dump(hdqn_logs_list, file)
+            with open("../logs/cntr_logs_list.pickle", "wb") as file:
+                pickle.dump(cntr_logs_list, file)
 
-            set_trace()
 
             print ("SAVING THE MODELS .............")  
             print ()
-            # serialize model to JSON
-            model_json = agent.meta_cntr.to_json()
-            with open("saved_models/meta_cntr.json", "w") as json_file:
-                json_file.write(model_json)
-            # serialize weights to HDF5
-            agent.meta_cntr.save_weights("saved_models/meta_cntr.h5")
-            print("Saved model to disk")
-
-            # serialize model to JSON
-            model_json = agent.target_meta_cntr.to_json()
-            with open("saved_models/target_meta_cntr.json", "w") as json_file:
-                json_file.write(model_json)
-            # serialize weights to HDF5
-            agent.target_meta_cntr.save_weights("saved_models/target_meta_cntr.h5")
-            print("Saved model to disk")
-
-            # serialize model to JSON
-            model_json = agent.cntr.to_json()
-            with open("saved_models/cntr.json", "w") as json_file:
-                json_file.write(model_json)
-            # serialize weights to HDF5
-            agent.cntr.save_weights("saved_models/cntr.h5")
-            print("Saved model to disk")
-
-          
-            model_json = agent.target_cntr.to_json()
-            with open("saved_models/target_cntr.json", "w") as json_file:
-                json_file.write(model_json)
-            # serialize weights to HDF5
-            agent.meta_cntr.save_weights("saved_models/target_cntr.h5")
-            print("Saved model to disk")
-
+            torch.save(agent.policy_meta_net.state_dict(), "../saved_models/policy_meta_net")
+            torch.save(agent.target_meta_net.state_dict(), "../saved_models/target_meta_net")
+            torch.save(agent.policy_cntr_net.state_dict(), "../saved_models/policy_cntr_net")
+            torch.save(agent.target_cntr_net.state_dict(), "../saved_models/target_cntr_net")
 
 def train_cntr(env, agent):
 
@@ -384,18 +358,18 @@ def train_cntr(env, agent):
     # SAVING MODELS AND THEIR WEIGHTS
     # serialize model to JSON
     model_json = agent.cntr.to_json()
-    with open("saved_models/cntr.json", "w") as json_file:
+    with open("../saved_models/cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.cntr.save_weights("saved_models/cntr.h5")
+    agent.cntr.save_weights("../saved_models/cntr.h5")
     print("Saved model to disk")
 
     # serialize model to JSON
     model_json = agent.target_cntr.to_json()
-    with open("saved_models/target_cntr.json", "w") as json_file:
+    with open("../saved_models/target_cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.meta_cntr.save_weights("saved_models/target_cntr.h5")
+    agent.meta_cntr.save_weights("../saved_models/target_cntr.h5")
     print("Saved model to disk")
 
 

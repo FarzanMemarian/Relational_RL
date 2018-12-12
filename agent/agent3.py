@@ -64,29 +64,29 @@ class cntr_class(nn.Module):
         return num_features    
 
 
-class meta_class(nn.Module):
+# class meta_class(nn.Module):
 
-    def __init__(self, final_conv_dim=3):
-        super().__init__()
-        # 1 input image channel, 6 output channels, 5x5 square convolution
-        # kernel
-        self.conv1 = nn.Conv2d(2, 6, kernel_size=2)
-        self.pool = nn.MaxPool2d(2,2)
-        self.conv2 = nn.Conv2d(6, 16, kernel_size=2)
-        # an affine operation: y = Wx + b
-        self.final_conv_dim = final_conv_dim
-        self.fc1 = nn.Linear(16 * final_conv_dim * final_conv_dim, 100)
-        self.fc2 = nn.Linear(100, 40)
-        self.fc3 = nn.Linear(40, 1)
+#     def __init__(self, final_conv_dim=3):
+#         super().__init__()
+#         # 1 input image channel, 6 output channels, 5x5 square convolution
+#         # kernel
+#         self.conv1 = nn.Conv2d(2, 6, kernel_size=2)
+#         self.pool = nn.MaxPool2d(2,2)
+#         self.conv2 = nn.Conv2d(6, 16, kernel_size=2)
+#         # an affine operation: y = Wx + b
+#         self.final_conv_dim = final_conv_dim
+#         self.fc1 = nn.Linear(16 * final_conv_dim * final_conv_dim, 100)
+#         self.fc2 = nn.Linear(100, 40)
+#         self.fc3 = nn.Linear(40, 1)
 
-    def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = x.view(-1, self.num_flat_features(x))
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+#     def forward(self, x):
+#         x = F.relu(self.conv1(x))
+#         x = F.relu(self.conv2(x))
+#         x = x.view(-1, self.num_flat_features(x))
+#         x = F.relu(self.fc1(x))
+#         x = F.relu(self.fc2(x))
+#         x = self.fc3(x)
+#         return x
 
     def num_flat_features(self, x):
         size = x.size()[1:]  # all dimensions except the batch dimension
@@ -150,8 +150,8 @@ class hDQN:
         self.meta_memory = ReplayMemory(self.meta_memory_size, self.meta_Transition)
 
         
-        self.policy_meta_net = meta_class()
-        self.target_meta_net = meta_class()
+        self.policy_meta_net = transformer.meta_class()
+        self.target_meta_net = transformer.meta_class()
         self.target_meta_net.load_state_dict(self.policy_meta_net.state_dict())
         self.target_meta_net.eval()
         self.meta_optimizer = optim.SGD(self.policy_meta_net.parameters(), lr=0.001)
@@ -271,8 +271,8 @@ class hDQN:
             return
 
         sample_size = min(self.batch_size, len(self.cntr_memory))
-        transitions = self.cntr_memory.sample(sample_size)
-        exps = self.cntr_Transition(*zip(*transitions))
+        exps = self.cntr_memory.sample(sample_size)
+
         state_tensors = torch.cat([torch.unsqueeze(exp.agent_env_goal_cntr, 0) for exp in exps])
         non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.cntr_done for exp in exps])))
         try:
@@ -312,10 +312,9 @@ class hDQN:
                 target_layer_w = self.target_tau * layer_w + (1 - self.target_tau) * target_layer_w
 
     def _update_meta(self):
-        pass
         # ["agent_env_state_0", "goal", "reward", "next_agent_env_state", "next_available_goals", "done"]
 
-        if len(self.meta_memory) <= 5:
+        if len(self.meta_memory) < 10:
             return
 
         sample_size = min(self.meta_batch_size, len(self.meta_memory))
@@ -326,7 +325,6 @@ class hDQN:
         state_tensors = torch.cat([torch.unsqueeze(utils.meta_input2(D_in, exp.agent_env_state_0, 
                             exp.goal), 0) for exp in exps])
         Q_policys = self.Q_meta(state_tensors, target=False)[0]
-
 
         reward_batch = torch.tensor([exp.reward for exp in exps], dtype=torch.float32)
 

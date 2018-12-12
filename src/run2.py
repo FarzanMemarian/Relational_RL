@@ -248,68 +248,68 @@ def train_HRL(env, agent, num_epis=10):
 
         if episode >= 100 and episode % 100 == 0:
             print("SAVING THE LOG FILES .........")
-            with open("logs/logs.txt", "w") as file:
+            with open("../logs/logs.txt", "w") as file:
                 file.write("game_won_counter: {}\n".format(game_won_counter)) 
                 file.write("game_over_counter: {}\n".format(game_over_counter))
 
-            with open("logs/game_result_history.txt", "w") as file:
+            with open("../logs/game_result_history.txt", "w") as file:
                 for game in game_result_history:
                     # item = game + "\n"
                     item = str(game) + "\n"
                     file.write(item)
 
-            with open("logs/game_result_history.pickle","wb") as file:
+            with open("../logs/game_result_history.pickle","wb") as file:
                 pickle.dump(game_result_history, file)
 
             # *******************************************************
-            with open("logs/hdqn_logs_list.txt", "w") as file:
+            with open("../logs/hdqn_logs_list.txt", "w") as file:
                 for line in hdqn_logs_list:
                     file.write(str(line[0]) + "   " +  str(line[1]) + "\n")
-            with open("logs/cntr_logs_list.txt", "w") as file:
+            with open("../logs/cntr_logs_list.txt", "w") as file:
                 for line in cntr_logs_list:
                     file.write(str(line[0]) + "   " +  str(line[1]) + "\n")
 
-            with open("logs/hdqn_logs_list.pickle", "wb") as file:
+            with open("../logs/hdqn_logs_list.pickle", "wb") as file:
                 pickle.dump(hdqn_logs_list, file)
-            with open("logs/cntr_logs_list.pickle", "wb") as file:
+            with open("../logs/cntr_logs_list.pickle", "wb") as file:
                 pickle.dump(cntr_logs_list, file)
 
 
             print ("SAVING THE MODELS .............")  
             print ()
-            torch.save(agent.policy_meta_net.state_dict(), "saved_models/policy_meta_net")
-            torch.save(agent.target_meta_net.state_dict(), "saved_models/target_meta_net")
-            torch.save(agent.policy_cntr_net.state_dict(), "saved_models/policy_cntr_net")
-            torch.save(agent.target_cntr_net.state_dict(), "saved_models/target_cntr_net")
+            torch.save(agent.policy_meta_net.state_dict(), "../saved_models/policy_meta_net")
+            torch.save(agent.target_meta_net.state_dict(), "../saved_models/target_meta_net")
+            torch.save(agent.policy_cntr_net.state_dict(), "../saved_models/policy_cntr_net")
+            torch.save(agent.target_cntr_net.state_dict(), "../saved_models/target_cntr_net")
             # # serialize model to JSON
             # model_json = agent.policy_meta_net.to_json()
-            # with open("saved_models/policy_meta_net.json", "w") as json_file:
+            # with open("../saved_models/policy_meta_net.json", "w") as json_file:
             #     json_file.write(model_json)
             # # serialize weights to HDF5
-            # agent.policy_meta_net.save_weights("saved_models/policy_meta_net.h5")
+            # agent.policy_meta_net.save_weights("../saved_models/policy_meta_net.h5")
             # print("Saved model to disk")
 
             # # serialize model to JSON
             # model_json = agent.target_meta_net.to_json()
-            # with open("saved_models/target_meta_net.json", "w") as json_file:
+            # with open("../saved_models/target_meta_net.json", "w") as json_file:
             #     json_file.write(model_json)
             # # serialize weights to HDF5
-            # agent.target_meta_net.save_weights("saved_models/target_meta_net.h5")
+            # agent.target_meta_net.save_weights("../saved_models/target_meta_net.h5")
             # print("Saved model to disk")
 
             # # serialize model to JSON
             # model_json = agent.policy_cntr_net.to_json()
-            # with open("saved_models/policy_cntr_net.json", "w") as json_file:
+            # with open("../saved_models/policy_cntr_net.json", "w") as json_file:
             #     json_file.write(model_json)
             # # serialize weights to HDF5
-            # agent.policy_cntr_net.save_weights("saved_models/policy_cntr_net.h5")
+            # agent.policy_cntr_net.save_weights("../saved_models/policy_cntr_net.h5")
             # print("Saved model to disk")
 
             # model_json = agent.target_cntr_net.to_json()
-            # with open("saved_models/target_cntr_net.json", "w") as json_file:
+            # with open("../saved_models/target_cntr_net.json", "w") as json_file:
             #     json_file.write(model_json)
             # # serialize weights to HDF5
-            # agent.target_cntr_net.save_weights("saved_models/target_cntr_net.h5")
+            # agent.target_cntr_net.save_weights("../saved_models/target_cntr_net.h5")
             # print("Saved model to disk")
 
 
@@ -389,18 +389,18 @@ def train_cntr(env, agent):
     # SAVING MODELS AND THEIR WEIGHTS
     # serialize model to JSON
     model_json = agent.cntr.to_json()
-    with open("saved_models/cntr.json", "w") as json_file:
+    with open("../saved_models/cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.cntr.save_weights("saved_models/cntr.h5")
+    agent.cntr.save_weights("../saved_models/cntr.h5")
     print("Saved model to disk")
 
     # serialize model to JSON
     model_json = agent.target_cntr.to_json()
-    with open("saved_models/target_cntr.json", "w") as json_file:
+    with open("../saved_models/target_cntr.json", "w") as json_file:
         json_file.write(model_json)
     # serialize weights to HDF5
-    agent.meta_cntr.save_weights("saved_models/target_cntr.h5")
+    agent.meta_cntr.save_weights("../saved_models/target_cntr.h5")
     print("Saved model to disk")
 
 
