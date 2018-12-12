@@ -13,49 +13,9 @@ from pdb import set_trace
 # seaborn.set_context(context="talk")
 # get_ipython().run_line_magic('matplotlib', 'inline')
 
-
-# Table of Contents
-# 
-# 
-# * Table of Contents                               
-# {:toc}      
-
 # > My comments are blockquoted. The main text is all from the paper itself.
 
-# # Background
 
-# The goal of reducing sequential computation also forms the foundation of the Extended Neural GPU, ByteNet and ConvS2S, all of which use convolutional neural networks as basic building block, computing hidden representations in parallel for all input and output positions. In these models, the number of operations required to relate signals from two arbitrary input or output positions grows in the distance between positions, linearly for ConvS2S and logarithmically for ByteNet. This makes it more difficult to learn dependencies between distant positions. In the Transformer this is reduced to a constant number of operations, albeit at the cost of reduced effective resolution due to averaging attention-weighted positions, an effect we counteract with Multi-Head Attention.
-# 
-# Self-attention, sometimes called intra-attention is an attention mechanism relating different positions of a single sequence in order to compute a representation of the sequence. Self-attention has been used successfully in a variety of tasks including reading comprehension, abstractive summarization, textual entailment and learning task-independent sentence representations. End-to-end memory networks are based on a recurrent attention mechanism instead of sequencealigned recurrence and have been shown to perform well on simple-language question answering and
-# language modeling tasks.
-# 
-# To the best of our knowledge, however, the Transformer is the first transduction model relying entirely on self-attention to compute representations of its input and output without using sequence aligned RNNs or convolution. 
-
-# # Model Architecture
-
-# Most competitive neural sequence transduction models have an encoder-decoder structure [(cite)](https://arxiv.org/abs/1409.0473). Here, the encoder maps an input sequence of symbol representations $(x_1, ..., x_n)$ to a sequence of continuous representations $\mathbf{z} = (z_1, ..., z_n)$. Given $\mathbf{z}$, the decoder then generates an output sequence $(y_1,...,y_m)$ of symbols one element at a time. At each step the model is auto-regressive [(cite)](https://arxiv.org/abs/1308.0850), consuming the previously generated symbols as additional input when generating the next. 
-
-
-class EncoderDecoder(nn.Module):
-    """
-    A standard Encoder-Decoder architecture. Base for this and many 
-    other models.
-    """
-    def __init__(self, encoder, decoder, generator):
-        super(EncoderDecoder, self).__init__()
-        self.encoder = encoder
-        self.decoder = decoder
-        self.generator = generator
-        
-    def forward(self, src, tgt, src_mask, tgt_mask):
-        "Take in and process masked src and target sequences."
-        return self.decode(self.encode(src, src_mask), src_mask, tgt, tgt_mask)
-    
-    def encode(self, src, src_mask):
-        return self.encoder(src, src_mask)
-    
-    def decode(self, memory, src_mask, tgt, tgt_mask):
-        return self.decoder(tgt, memory, src_mask, tgt_mask)
 
 class Generator(nn.Module):
     "Define standard linear + softmax generation step."
@@ -81,6 +41,7 @@ def clones(module, N):
     "Produce N identical layers."
     return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
 
+
 class Encoder(nn.Module):
     "Core encoder is a stack of N layers"
     def __init__(self, layer, N):
@@ -89,7 +50,8 @@ class Encoder(nn.Module):
         self.norm = LayerNorm(layer.size)
         
     def forward(self, x, mask):
-        "Pass the input (and mask) through each layer in turn."
+        "Pass the input (and mask) through each lcayer in turn."
+        set_trace()
         for layer in self.layers:
             x = layer(x, mask)
         return self.norm(x)
@@ -140,6 +102,7 @@ class EncoderLayer(nn.Module):
     "Encoder is made up of self-attn and feed forward (defined below)"
     def __init__(self, size, self_attn, feed_forward, dropout):
         super().__init__()
+        super().__init__()
         self.self_attn = self_attn
         self.feed_forward = feed_forward
         self.sublayer = clones(SublayerConnection(size, dropout), 2)
@@ -154,54 +117,6 @@ class EncoderLayer(nn.Module):
 # 
 # The decoder is also composed of a stack of $N=6$ identical layers.  
 # 
-
-class Decoder(nn.Module):
-    "Generic N layer decoder with masking."
-    def __init__(self, layer, N):
-        super().__init__()
-        self.layers = clones(layer, N)
-        self.norm = LayerNorm(layer.size)
-        
-    def forward(self, x, memory, src_mask, tgt_mask):
-        for layer in self.layers:
-            x = layer(x, memory, src_mask, tgt_mask)
-        return self.norm(x)
-
-class DecoderLayer(nn.Module):
-    "Decoder is made of self-attn, src-attn, and feed forward (defined below)"
-    def __init__(self, size, self_attn, src_attn, feed_forward, dropout):
-        super(DecoderLayer, self).__init__()
-        self.size = size
-        self.self_attn = self_attn
-        self.src_attn = src_attn
-        self.feed_forward = feed_forward
-        self.sublayer = clones(SublayerConnection(size, dropout), 3)
- 
-    def forward(self, x, memory, src_mask, tgt_mask):
-        "Follow Figure 1 (right) for connections."
-        m = memory
-        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
-        x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
-        return self.sublayer[2](x, self.feed_forward)
-
-
-# We also modify the self-attention sub-layer in the decoder stack to prevent positions 
-# from attending to subsequent positions.  This masking, combined with fact that the output 
-# embeddings are offset by one position, ensures that the predictions for position $i$ 
-# can depend only on the known outputs at positions less than $i$.
-
-
-
-
-def subsequent_mask(size):
-    "Mask out subsequent positions."
-    attn_shape = (1, size, size)
-    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
-    return torch.from_numpy(subsequent_mask) == 0
-
-
-# > Below the attention mask shows the position each tgt word (row) is allowed to look 
-# at (column). Words are blocked for attending to future words during training.
 
 
 
@@ -260,11 +175,6 @@ def attention(query, key, value, mask=None, dropout=None):
 #     random variables with mean $0$ and variance $1$.  Then their dot product,
 #      $q \cdot k = \sum_{i=1}^{d_k} q_ik_i$, has mean $0$ and variance $d_k$.). 
 #  To counteract this effect, we scale the dot products by $\frac{1}{\sqrt{d_k}}$.          
-
-#  
-
-
-
 
 
 # Multi-head attention allows the model to jointly attend to information from different 
@@ -336,15 +246,15 @@ class MultiHeadedAttention(nn.Module):
 # all values in the input of the softmax which correspond to illegal connections.                                                                                                                                                                                                                                                      
 
 # ## Position-wise Feed-Forward Networks                                                                                                                                                                                                                                                                                                                                                             
-#                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+#
 
 # 
 # $$\mathrm{FFN}(x)=\max(0, xW_1 + b_1) W_2 + b_2$$                                                                                                                                                                                                                                                         
 #                                                                                                                                                                                                                                                         
 # While the linear transformations are the same across different positions, they use different
- # parameters from layer to layer. Another way of describing this is as two convolutions with 
- # kernel size 1.  The dimensionality of input and output is $d_{\text{model}}=512$, and the 
- # inner-layer has dimensionality $d_{ff}=2048$. 
+# parameters from layer to layer. Another way of describing this is as two convolutions with 
+# kernel size 1.  The dimensionality of input and output is $d_{\text{model}}=512$, and the 
+# inner-layer has dimensionality $d_{ff}=2048$. 
 
 
 
@@ -360,127 +270,69 @@ class PositionwiseFeedForward(nn.Module):
     def forward(self, x):
         return self.w_2(self.dropout(F.relu(self.w_1(x))))
 
-
-# ## Embeddings and Softmax                                                                                                                                                                                                                                                                                           
-# Similarly to other sequence transduction models, we use learned embeddings to convert the 
-# input tokens and output tokens to vectors of dimension $d_{\text{model}}$.  We also use the
-# usual learned linear transformation and softmax function to convert the decoder output to 
-# predicted next-token probabilities.  In our model, we share the same weight matrix between 
-# the two embedding layers and the pre-softmax linear transformation, similar to 
-# [(cite)](https://arxiv.org/abs/1608.05859). In the embedding layers, we multiply those 
-# weights by $\sqrt{d_{\text{model}}}$.                                                                                                                                 
-
-
-
-
-class Embeddings(nn.Module):
-    def __init__(self, d_model, vocab):
-        super(Embeddings, self).__init__()
-        self.lut = nn.Embedding(vocab, d_model)
-        self.d_model = d_model
-
-    def forward(self, x):
-        return self.lut(x) * math.sqrt(self.d_model)
-
-
-# ## Positional Encoding                                                                                                                             
-# Since our model contains no recurrence and no convolution, in order for the model to make use of the order of the sequence, we must inject some information about the relative or absolute position of the tokens in the sequence.  To this end, we add "positional encodings" to the input embeddings at the bottoms of the encoder and decoder stacks.  The positional encodings have the same dimension $d_{\text{model}}$ as the embeddings, so that the two can be summed.   There are many choices of positional encodings, learned and fixed [(cite)](https://arxiv.org/pdf/1705.03122.pdf). 
-# 
-
-# $$PE_{(pos,2i)} = sin(pos / 10000^{2i/d_{\text{model}}})$$
-# 
-# $$PE_{(pos,2i+1)} = cos(pos / 10000^{2i/d_{\text{model}}})$$                                                                                                                                                                                                                                                        
-# where $pos$ is the position and $i$ is the dimension.  That is, each dimension of the positional encoding corresponds to a sinusoid.  The wavelengths form a geometric progression from $2\pi$ to $10000 \cdot 2\pi$.  We chose this function because we hypothesized it would allow the model to easily learn to attend by relative positions, since for any fixed offset $k$, $PE_{pos+k}$ can be represented as a linear function of $PE_{pos}$. 
-# 
-#                                                                                                                                                                                                                                                     
-# 
-
-
-
-class PositionalEncoding(nn.Module):
-    "Implement the PE function."
-    def __init__(self, d_model, dropout, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        
-        # Compute the positional encodings once in log space.
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) *
-                             -(math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
-        
-    def forward(self, x):
-        x = x + Variable(self.pe[:, :x.size(1)], 
-                         requires_grad=False)
-        return self.dropout(x)
-
-
-# > Below the positional encoding will add in a sine wave based on position. The frequency and offset of the wave is different for each dimension. 
-
-
-
-
-# plt.figure(figsize=(15, 5))
-# pe = PositionalEncoding(20, 0)
-# y = pe.forward(Variable(torch.zeros(1, 100, 20)))
-# plt.plot(np.arange(100), y[0, :, 4:8].data.numpy())
-# plt.legend(["dim %d"%p for p in [4,5,6,7]])
-# None
-
-
-# We also experimented with using learned positional embeddings [(cite)](https://arxiv.org/pdf/1705.03122.pdf) instead, and found that the two versions produced nearly identical results.  We chose the sinusoidal version because it may allow the model to extrapolate to sequence lengths longer than the ones encountered during training.    
-
 # ## Full Model
 # 
 # > Here we define a function from hyperparameters to a full model. 
 
-
-class make_model(nn.Module):
-    def __init__(self, final_conv_dim=3, src_vocab, tgt_vocab, N=6, 
-               d_model=512, d_ff=2048, h=8, dropout=0.1):
+class meta_class(nn.Module):
+    def __init__(self, final_conv_dim=3, N=6, 
+               d_model=16, d_ff=80, h=8, dropout=0.1):
         super().__init__()
         self.conv1 = nn.Conv2d(2,  6, kernel_size=2)
         self.pool = nn.MaxPool2d(2,2)
-        self.conv2 = nn.Conv2d(6, 16, kernel_size=2)
+        self.conv2 = nn.Conv2d(6, 14, kernel_size=2)
         # an affine operation: y = Wx + b
         self.final_conv_dim = final_conv_dim
-        self.fc1 = nn.Linear(16 * final_conv_dim * final_conv_dim, 100)
+        self.c = copy.deepcopy
+        self.d_model=d_model 
+        self.d_ff=d_ff 
+        self.h=h 
+        self.dropout=dropout
+        self.attn = MultiHeadedAttention(h, d_model)
+        self.ff = PositionwiseFeedForward(d_model, d_ff, dropout)
+        self.Encoder = Encoder(EncoderLayer(d_model, self.c(self.attn), self.c(self.ff), dropout), N)
+        self.fc1 = nn.Linear((d_model+2) * final_conv_dim * final_conv_dim, 100)
         self.fc2 = nn.Linear(100, 40) 
-        self.fc3 = nn.Linear(40, 4) 
-        self.EncoderDecoder = 
-
-        c = copy.deepcopy
-        attn = MultiHeadedAttention(h, d_model)
-        ff = PositionwiseFeedForward(d_model, d_ff, dropout)
-        position = PositionalEncoding(d_model, dropout)
-
+        self.fc3 = nn.Linear(40, 4)
 
     def forward(self, x):
         "Helper: Construct a model from hyperparameters."
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
+        x, batch_size = self.PositionApppend(x)
+        x = x.view(batch_size, -1, self.d_model)
+        set_trace()
+        x = self.Encoder(x)
         x = x.view(-1, self.num_flat_features(x))
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        x = EncoderDecoder(
-            Encoder(EncoderLayer(d_model, c(attn), c(ff), dropout), N),
-            Decoder(DecoderLayer(d_model, c(attn), c(attn), 
-                                 c(ff), dropout), N),
-            nn.Sequential(Embeddings(d_model, src_vocab), c(position)),
-            nn.Sequential(Embeddings(d_model, tgt_vocab), c(position)))
+        
+        # x = F.relu(self.fc1(x))
+        # x = F.relu(self.fc2(x))
+        # x = self.fc3(x)
+        x = self.Encoder(x)
         
         # This was important from their code. 
         for p in model.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform(p)
-
         return x
 
+    def PositionApppend(self, x):
+            batch_size, depth, n, n = x.size()
+            pos_tensor = torch.zeros((batch_size, 2 ,n, n))
+            for i in range(n):
+                for j in range(n):
+                    pos_tensor[:,0, i,j]=i
+                    pos_tensor[:,1, i,j]=j
+            x = torch.cat((x,pos_tensor),1)
+            return x, batch_size
+
+
+    def num_flat_features(self, x):
+        size = x.size()[1:]  # all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features  
 
 # # Training
 # 
@@ -617,3 +469,4 @@ class NoamOpt:
 def get_std_opt(model):
     return NoamOpt(model.src_embed[0].d_model, 2, 4000,
             torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
+
