@@ -1,5 +1,3 @@
-# used part of the code from https://github.com/EthanMacdonald/h-DQN/blob/master/agent/hDQN.py
-
 import random
 import numpy as np
 import copy
@@ -32,20 +30,23 @@ default_tau = 0.001
 default_cntr_memory_size = 10000
 
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cpu")
+
 class cntr_class(nn.Module):
 
-    def __init__(self, final_conv_dim=3):
+    def __init__(self, last_conv_depth=32, final_conv_dim=3):
         super().__init__()
-        # 1 input image channel, 6 output channels, 5x5 square convolution
-        # kernel
-        self.conv1 = nn.Conv2d(2,  6, kernel_size=2)
-        self.pool = nn.MaxPool2d(2,2)
-        self.conv2 = nn.Conv2d(6, 16, kernel_size=2)
+        # 1 input image channel, 6 output channels, 5x5 square convolution kernel
+        self.conv1 = nn.Conv2d(2,  16, kernel_size=2)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, last_conv_depth, kernel_size=2)
+        self.bn2 = nn.BatchNorm2d(last_conv_depth)
         # an affine operation: y = Wx + b
         self.final_conv_dim = final_conv_dim
-        self.fc1 = nn.Linear(16 * final_conv_dim * final_conv_dim, 100)
-        self.fc2 = nn.Linear(100, 40) 
-        self.fc3 = nn.Linear(40, 4)   
+        self.fc1 = nn.Linear(last_conv_depth * final_conv_dim * final_conv_dim, 100)
+        self.fc2 = nn.Linear(100, 40)
+        self.fc3 = nn.Linear(40, 4)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -111,8 +112,7 @@ class ReplayMemory(object):
         self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size):
-        # return random.sample(self.memory, batch_size)
-        return self.memory[-batch_size:]
+        return random.sample(self.memory, batch_size)
 
     def __len__(self):
         return len(self.memory)
@@ -133,8 +133,8 @@ class hDQN:
                 meta_memory_size):
 
         self.env = env
-        self.goal_selected = np.zeros(len(self.env.original_objects))
-        self.goal_success = np.zeros(len(self.env.original_objects))
+        # self.goal_selected = 0
+        # self.goal_success = 0
         self.meta_epsilon = meta_epsilon
         self.epsilon = epsilon
         self.batch_size = batch_size
@@ -149,16 +149,15 @@ class hDQN:
         self.cntr_memory = ReplayMemory(self.cntr_memory_size, self.cntr_Transition)
         self.meta_memory = ReplayMemory(self.meta_memory_size, self.meta_Transition)
 
-        
-        self.policy_meta_net = transformer.meta_class()
-        self.target_meta_net = transformer.meta_class()
+        self.policy_meta_net = transformer.meta_class().to(device)
+        self.target_meta_net = transformer.meta_class().to(device)
         self.target_meta_net.load_state_dict(self.policy_meta_net.state_dict())
         self.target_meta_net.eval()
         self.meta_optimizer = optim.SGD(self.policy_meta_net.parameters(), lr=0.001)
         self.meta_criterion = nn.MSELoss()
         
-        self.policy_cntr_net = cntr_class()
-        self.target_cntr_net = cntr_class()
+        self.policy_cntr_net = cntr_class().to(device)
+        self.target_cntr_net = cntr_class().to(device)
         self.target_cntr_net.load_state_dict(self.policy_cntr_net.state_dict())
         self.target_cntr_net.eval()
         self.cntr_optimizer = optim.SGD(self.policy_cntr_net.parameters(), lr=0.001)
@@ -174,7 +173,6 @@ class hDQN:
                     Q.append(pred.item())
                 goal_idx = np.argmax(Q)
                 goal = self.env.current_objects[goal_idx]
-
         else:
             print("Exploring ...............")
             goal = self.random_goal_selection()
@@ -187,7 +185,6 @@ class hDQN:
         goal_idx = int(np.random.choice(len(self.env.current_objects)))
         goal = self.env.current_objects[goal_idx]
         return goal
-
 
     def select_action(self, agent_state, env_state, goal):
         i = agent_state[0,0].item()
@@ -226,7 +223,6 @@ class hDQN:
         if meta:
             self.meta_memory.push(*args)
             # if not self.meta_memory.memory[-1].terminal:
-
         else:
             self.cntr_memory.push(*args)
 
@@ -266,7 +262,6 @@ class hDQN:
 
 
     def _update_cntr(self):
-        pass
         if len(self.cntr_memory) < self.batch_size:
             return
 
@@ -274,13 +269,14 @@ class hDQN:
         exps = self.cntr_memory.sample(sample_size)
 
         state_tensors = torch.cat([torch.unsqueeze(exp.agent_env_goal_cntr, 0) for exp in exps])
-        non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.cntr_done for exp in exps])))
+        non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.cntr_done for exp in exps])), 
+            device=device)
         try:
             next_state_non_terminals = torch.cat([torch.unsqueeze(exp.next_agent_env_goal_cntr, 0) 
             for exp in exps if exp.cntr_done != True])
         except:
             print("all states done ......")
-        next_state_Vs = torch.zeros(sample_size)
+        next_state_Vs = torch.zeros(sample_size, device=device)
         next_state_Vs[non_terminal_mask] = self.Q_cntr(next_state_non_terminals, 
                                            target=True)[0].max(1)[0].detach()
         
@@ -290,7 +286,7 @@ class hDQN:
 
         Q_policys = self.Q_cntr(state_tensors, target=False)[0].gather(1, action_batch)
 
-        
+        set_trace()
         try:
             Q_targets = (next_state_Vs * self.gamma) + reward_batch
         except:

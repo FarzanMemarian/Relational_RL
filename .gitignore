@@ -1,6 +1,11 @@
 howToRun
+HINTON
 IDEAL_GPU
 sftp-config.json
+logs
+saved_models
+*.pickle
+
 # models
 *.json
 *.h5

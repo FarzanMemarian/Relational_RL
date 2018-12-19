@@ -1,6 +1,3 @@
-    
-# The Transformer from ["Attention is All You Need"](https://arxiv.org/abs/1706.03762) has been on a lot of people's minds over the last year. Besides producing major improvements in translation quality, it provides a new architecture for many other NLP tasks. The paper itself is very clearly written, but the conventional wisdom has been that it is quite difficult to implement correctly. 
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -250,17 +247,20 @@ class PositionwiseFeedForward(nn.Module):
     def forward(self, x):
         return self.w_2(self.dropout(F.relu(self.w_1(x))))
 
+
+
 # ## Full Model
 # 
 # > Here we define a function from hyperparameters to a full model. 
 
 class meta_class(nn.Module):
-    def __init__(self, final_conv_dim=3, N=6, last_conv_depth=14, 
+    def __init__(self, final_conv_dim=3, N=6, last_conv_depth=30, 
                d_model=16, d_ff=80, h=8, dropout=0.1):
         super().__init__()
-        self.conv1 = nn.Conv2d(2,  6, kernel_size=2)
-        self.pool = nn.MaxPool2d(2,2)
-        self.conv2 = nn.Conv2d(6, last_conv_depth, kernel_size=2)
+        self.conv1 = nn.Conv2d(2,  16, kernel_size=2)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, last_conv_depth, kernel_size=2)
+        self.bn2 = nn.BatchNorm2d(last_conv_depth)
         # an affine operation: y = Wx + b
         self.final_conv_dim = final_conv_dim
         self.c = copy.deepcopy
@@ -277,8 +277,8 @@ class meta_class(nn.Module):
 
     def forward(self, x):
         "Helper: Construct a model from hyperparameters."
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
         x, batch_size = self.PositionApppend(x)
         x = x.view(batch_size, -1, self.d_model)
         x = self.Encoder(x, None)
@@ -303,11 +303,6 @@ class meta_class(nn.Module):
         for s in size:
             num_features *= s
         return num_features  
-
-
-
-
-
 
 
 

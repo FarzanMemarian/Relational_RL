@@ -2,11 +2,11 @@
 
 ## Case 1
 - the most basic case
-- uses keras on top of tensorflow
 - objects are removed after they are reached
 - all fully connected layers, no convolution
 - no relational-module used
 - HRL is implemented based on Kulhani's paper
+- need to create this out of case 2 or three, the current version is based on Keras
 
 ## Case 2
 - the first version on Pytorch
