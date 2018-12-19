@@ -223,7 +223,7 @@ def train_DHRL(env, agent, args):
                     # print ("original objects: {}".format(env.original_objects))
                     # print ("current objects: {}".format(env.current_objects))
                     # print ("********************")
-
+                
                 if game_over:
                     game_over_counter += 1
                     game_result_history.append([0, episode])
