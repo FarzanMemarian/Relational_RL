@@ -27,21 +27,21 @@ def init(args):
     global num_epis_G
     global fileName_G
 
-    train_only_cntr_G  = False
+    train_only_cntr_G  = True
     num_epis_G = 10000
-    fileName_G = "3_dhrl_gpu"
+    fileName_G = "3_cntr_gpu"
+
+    #  WRITE PERIODS
+    write_period_dhrl = 199
+    write_period_cntr = 199
 
     # GRID WORLD GEOMETRICAL PARAMETERS
     D_in = 5 # pick odd numbers
-    start = torch.zeros([1,2], dtype=torch.int)
-    start[0,0] = 0
-    start[0,1] = 1
     n_obj = 2
     min_num = 1
     max_num = 10
 
     # extr REWARDS
-    not_moving_reward = 0
     game_over_reward = -10
     step_reward = 0
     current_goal_reward = 10
@@ -53,32 +53,30 @@ def init(args):
     int_wrong_goal_reward = -200
 
     # PARAMETERS OF MEATA cntr
-    meta_batch_size = 30
-    meta_epsilon = 1
+    meta_batch_size = 10
+    meta_epsilon = 0.5
     meta_memory_size = 1000
 
     # PARAMETERS OF THE cntr
-    batch_size = 30
+    batch_size = 10
     gamma = 0.975
-    epsilon = 1
+    epsilon = 0.5
     tau = 0.001
     cntr_memory_size = 1000
 
 
     cntr_Transition = namedtuple("cntr_Transition", 
-        ["agent_env_goal_cntr", "action_idx", "int_reward", "next_agent_env_goal_cntr", "goal", 
-        "next_available_actions", "cntr_done"])
+        ["agent_env_cntr", "action_idx", "int_reward", "next_agent_env_cntr", "meta_goal", 
+        "next_available_actions", "terminal"])
     meta_Transition = namedtuple("meta_Transition",   
-        ["agent_env_state_0", "goal", "reward", "next_agent_env_state", 
+        ["agent_env_state_0", "meta_goal", "reward", "next_agent_env_state", 
         "next_available_goals", "terminal", "meta_exp_counter"])
 
     # create and initialize the environment   
     env = Gridworld(D_in = D_in, 
-                    start = start, 
                     n_obj=n_obj, 
                     min_num = min_num, 
                     max_num = max_num,
-                    not_moving_reward = not_moving_reward, 
                     game_over_reward = game_over_reward, 
                     step_reward = step_reward, 
                     current_goal_reward=current_goal_reward, 
@@ -107,7 +105,6 @@ def init(args):
             "n_obj":n_obj, 
             "min_num" : min_num, 
             "max_num" : max_num,
-            "not_moving_reward" : not_moving_reward, 
             "game_over_reward" : game_over_reward, 
             "step_reward" : step_reward, 
             "current_goal_reward":current_goal_reward, 
@@ -136,10 +133,14 @@ def init(args):
 
 
 def addresses():
+    cmd = 'rm -rf ../logs/' + fileName_G
+    os.system(cmd)
     cmd = 'mkdir ../logs/' + fileName_G
     os.system(cmd)
-    logs_address = "../logs/" + fileName_G + "/"
 
+    logs_address = "../logs/" + fileName_G + "/"
+    cmd = 'rm -rf ../saved_models/' + fileName_G
+    os.system(cmd)
     cmd = 'mkdir ../saved_models/' + fileName_G
     os.system(cmd)
     models_address = "../saved_models/" + fileName_G + "/"
@@ -164,7 +165,10 @@ def train_DHRL(env, agent, args):
     hdqn_logs_list = [] # each slement should be [episode_steps, game_won]
     for episode in range(num_epis_G):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
-        agent_state, env_state = env.reset() 
+        if reset_type == 'reset': 
+            agent_state, env_state = env.reset() 
+        if reset_type == 'reset_total':
+            agent_state, env_state = env.reset_total() 
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
         episode_steps = 0
@@ -174,6 +178,7 @@ def train_DHRL(env, agent, args):
             goal_selected += 1
             print("\nNew Goal: "  + str(meta_goal) + "\n")
             total_extr_reward = 0
+
             agent_env_state_0 = utils.agent_env_state(agent_state, env_state) # for meta controller start state
             meta_goal_reached = False
             cntr_steps = 0
@@ -248,17 +253,17 @@ def train_DHRL(env, agent, args):
 
                 # if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
-                cntr_done = meta_goal_reached or terminal # note that cntr_done refers 
-                                                                    # to next state
-                agent_env_goal_cntr = utils.cntr_input(env.D_in, agent_state, env_state, meta_goal)
-                next_agent_env_goal_cntr = utils.cntr_input(env.D_in, next_agent_state, next_env_state, meta_goal)
+                agent_env_cntr = utils.agent_env_state(agent_state, env_state)
+                next_agent_env_cntr = utils.agent_env_state(next_agent_state, next_env_state)
                 next_available_actions = env.allowable_actions[i,j]
 
                 # if the state is terminal, the experiment will not even be added to the cntr_Transition
                 # or the MetaEcperience, only the next_state can be terminal
-                exp_cntr = copy.deepcopy([agent_env_goal_cntr, action_idx, int_reward,  
-                    next_agent_env_goal_cntr, meta_goal, next_available_actions, cntr_done])
-                # agent.store(*exp_cntr, meta=False)
+                exp_cntr = copy.deepcopy([agent_env_cntr, action_idx, int_reward,  
+                    next_agent_env_cntr, 
+                    torch.tensor([meta_goal], dtype=torch.float, device=device), 
+                    next_available_actions, terminal])
+                agent.store(*exp_cntr, meta=False)
                 agent.update(meta=False)
                 agent.update(meta=True)
                 total_extr_reward += extr_reward
@@ -271,8 +276,8 @@ def train_DHRL(env, agent, args):
             next_agent_env_state = utils.agent_env_state(agent_state, env_state)
             next_available_goals = env.current_objects
             meta_exp_counter += 1 
-            exp_meta = copy.deepcopy([agent_env_state_0, meta_goal, total_extr_reward, next_agent_env_state, 
-                next_available_goals, terminal, meta_exp_counter])
+            exp_meta = copy.deepcopy([agent_env_state_0, torch.tensor([meta_goal], dtype=torch.float, device=device), total_extr_reward, 
+                next_agent_env_state, next_available_goals, terminal, meta_exp_counter])
             agent.store(*exp_meta, meta=True)
 
             # Annealing 
@@ -295,7 +300,7 @@ def train_DHRL(env, agent, args):
         print("meta_epsilon: " + str(agent.meta_epsilon))
         print("epsilon: " + str(agent.epsilon))
 
-        if episode != 0 and episode % 49 == 0:
+        if episode != 0 and episode % write_period_dhrl == 0:
             print("SAVING THE LOG FILES .........")
             with open(logs_address + "logs.txt", "w") as file:
                 file.write("game_won_counter: {}\n".format(game_won_counter)) 
@@ -343,7 +348,12 @@ def train_cntr(env, agent, args):
     hdqn_logs_list = [] # each slement should be [episode_steps, game_won]
     for episode in range(num_epis_G):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
-        agent_state, env_state = env.reset2() 
+        
+        if reset_type == 'reset': 
+            agent_state, env_state = env.reset() 
+        if reset_type == 'reset_total':
+            agent_state, env_state = env.reset_total() 
+
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
         non_meta_obj_reached = False
@@ -425,17 +435,17 @@ def train_cntr(env, agent, args):
 
                 # if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
-                cntr_done = meta_goal_reached or terminal # note that cntr_done refers 
-                                                                    # to next state
-                agent_env_goal_cntr = utils.cntr_input(env.D_in, agent_state, env_state, meta_goal)
-                next_agent_env_goal_cntr = utils.cntr_input(env.D_in, next_agent_state, next_env_state, meta_goal)
+
+                agent_env_goal_cntr = utils.agent_env_state(agent_state, env_state)
+                next_agent_env_goal_cntr = utils.agent_env_state(next_agent_state, next_env_state)
                 next_available_actions = env.allowable_actions[i,j]
 
                 # if the state is terminal, the experiment will not even be added to the cntr_Transition
                 # or the MetaEcperience, only the next_state can be terminal
                 exp_cntr = copy.deepcopy([agent_env_goal_cntr, action_idx, int_reward,  
-                    next_agent_env_goal_cntr, meta_goal, next_available_actions, cntr_done])
-                # agent.store(*exp_cntr, meta=False)
+                    next_agent_env_goal_cntr, torch.tensor([meta_goal], dtype=torch.float, device=device), 
+                    next_available_actions, terminal])
+                agent.store(*exp_cntr, meta=False)
                 agent.update(meta=False)
                 # agent.update(meta=True)
                 # total_extr_reward += extr_reward
@@ -473,7 +483,7 @@ def train_cntr(env, agent, args):
         # print("meta_epsilon: " + str(agent.meta_epsilon))
         print("epsilon: " + str(agent.epsilon))
 
-        if episode != 0 and episode % 499 == 0:
+        if episode != 0 and episode % write_period_cntr == 0:
             with open(logs_address + "cntr_logs_list_train_cntr.txt", "w") as file:
                 file.write("cntr_steps, meta_goal_reached, current_target_reached, episode_steps, episode \n")
                 for line in cntr_logs_list:

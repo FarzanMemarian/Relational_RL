@@ -38,23 +38,27 @@ class cntr_class(nn.Module):
     def __init__(self, last_conv_depth=32, final_conv_dim=3):
         super().__init__()
         # 1 input image channel, 6 output channels, 5x5 square convolution kernel
-        self.conv1 = nn.Conv2d(2,  16, kernel_size=2)
+        self.conv1 = nn.Conv2d(1,  16, kernel_size=2)
         self.bn1 = nn.BatchNorm2d(16)
         self.conv2 = nn.Conv2d(16, last_conv_depth, kernel_size=2)
         self.bn2 = nn.BatchNorm2d(last_conv_depth)
         # an affine operation: y = Wx + b
         self.final_conv_dim = final_conv_dim
-        self.fc1 = nn.Linear(last_conv_depth * final_conv_dim * final_conv_dim, 100)
-        self.fc2 = nn.Linear(100, 40)
-        self.fc3 = nn.Linear(40, 4)
+        self.fc1 = nn.Linear(last_conv_depth * final_conv_dim * final_conv_dim + 1, 40)
+        self.fc2 = nn.Linear(40, 4)
 
-    def forward(self, x):
+    def forward(self, x, g):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = x.view(-1, self.num_flat_features(x))
+        
+        x = self.append_goal(x,g)
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.fc2(x)
+        return x
+
+    def append_goal(self, x, g):
+        x = torch.cat([x, g], 1)
         return x
 
     def num_flat_features(self, x):
@@ -89,12 +93,12 @@ class cntr_class(nn.Module):
 #         x = self.fc3(x)
 #         return x
 
-    def num_flat_features(self, x):
-        size = x.size()[1:]  # all dimensions except the batch dimension
-        num_features = 1
-        for s in size:
-            num_features *= s
-        return num_features
+    # def num_flat_features(self, x):
+    #     size = x.size()[1:]  # all dimensions except the batch dimension
+    #     num_features = 1
+    #     for s in size:
+    #         num_features *= s
+    #     return num_features
 
 class ReplayMemory(object):
 
@@ -168,8 +172,8 @@ class hDQN:
             with torch.no_grad():
                 Q = []
                 for goal in self.env.current_objects:
-                    meta_input = utils.meta_input(self.env.D_in, agent_state, self.env.grid_mat, goal)
-                    pred, _ = self.Q_meta(meta_input, False)
+                    agent_env_state = utils.agent_env_state(agent_state, self.env.grid_mat)
+                    pred = self.Q_meta(agent_env_state, goal, False)
                     Q.append(pred.item())
                 goal_idx = np.argmax(Q)
                 goal = self.env.current_objects[goal_idx]
@@ -190,22 +194,11 @@ class hDQN:
         i = agent_state[0,0].item()
         j = agent_state[0,1].item()
         if random.random() > self.epsilon:
-            # print("cntr selected action")
-            # ensures that only actions that cause movement are chosen
             with torch.no_grad():
-                cntr_input = utils.cntr_input(self.env.D_in, agent_state, env_state, goal)
-                action_probs, _ = self.Q_cntr(cntr_input, False) 
-                allowable_action_idxs = self.env.allowable_action_idxs[i, j]
-                allowable_action_probs = action_probs[0,allowable_action_idxs]
-                allowable_action_probs_max_idx = np.argmax(allowable_action_probs.numpy())
-                action_idx = allowable_action_idxs[allowable_action_probs_max_idx]
-                action = self.env.all_actions[action_idx]
-                # print ("\n \naction_probs: {}".format(action_probs))
-                # print ("allowable_action_idxs: {}".format(allowable_action_idxs))
-                # print ("allowable_action_probs: {}".format(allowable_action_probs))
-                # print ("allowable_action_probs_max_idx: {}".format(allowable_action_probs_max_idx))
-                # print ("action_idx: {}".format(action_idx))
-            # set_trace()
+                agent_env_state = utils.agent_env_state(agent_state, env_state)
+                action_probs = self.Q_cntr(agent_env_state, goal, False) 
+                action_idx = action_probs.max(1)[1]
+                action = self.env.all_actions[action_idx.item()]
         else:
             action_idx, action = self.random_action_selection()
         return action_idx, action
@@ -214,8 +207,9 @@ class hDQN:
         # print("random action selected")
         i = self.env.agent_loc[0,0].item() 
         j = self.env.agent_loc[0,1].item()
-        allowable_action_idxs = self.env.allowable_action_idxs[i,j]
-        action_idx = int(np.random.choice(allowable_action_idxs))
+        # allowable_action_idxs = self.env.allowable_action_idxs[i,j]
+        all_actions = self.env.all_actions
+        action_idx = int(np.random.choice(np.arange(4)))
         action = self.env.all_actions[action_idx]
         return action_idx, action
 
@@ -227,71 +221,80 @@ class hDQN:
             self.cntr_memory.push(*args)
 
 
-    def Q_cntr(self, cntr_input, target):
+    def Q_cntr(self, agent_env_state, goal, target):
         if target:
             try:
-                Q_policys = self.target_cntr_net(cntr_input) 
+                Q_policys = self.target_cntr_net(agent_env_state, goal) 
             except Exception as e:
-                cntr_input = torch.unsqueeze(cntr_input, dim=0)
-                Q_policys = self.target_cntr_net(cntr_input) 
-            return Q_policys, cntr_input
+                agent_env_state = torch.unsqueeze(agent_env_state, dim=0)
+                goal = torch.unsqueeze(torch.tensor([goal], dtype=torch.float32, device=device), dim=0)
+                Q_policys = self.target_cntr_net(agent_env_state, goal) 
         else:
             try:
-                Q_policys = self.policy_cntr_net(cntr_input) 
+                Q_policys = self.policy_cntr_net(agent_env_state, goal) 
             except Exception as e:
-                cntr_input = torch.unsqueeze(cntr_input, dim=0)
-                Q_policys = self.policy_cntr_net(cntr_input)
-            return Q_policys, cntr_input
+                agent_env_state = torch.unsqueeze(agent_env_state, dim=0)
+                goal = torch.unsqueeze(torch.tensor([goal], dtype=torch.float32, device=device), dim=0)
+                Q_policys = self.policy_cntr_net(agent_env_state, goal)
+        return Q_policys
 
-    def Q_meta(self, meta_input, target):
+    def Q_meta(self, agent_env_state, goal, target):
         if target:
             try:
-                Q_policys = self.target_meta_net(meta_input)
+                Q_policys = self.target_meta_net(agent_env_state, goal)
             except Exception as e:
-                meta_input = torch.unsqueeze(meta_input, dim=0)
-                Q_policys = self.target_meta_net(meta_input)
-            return Q_policys, meta_input
+                agent_env_state = torch.unsqueeze(agent_env_state, dim=0)
+                goal = torch.unsqueeze(torch.tensor([goal], dtype=torch.float32, device=device), dim=0)
+                Q_policys = self.target_meta_net(agent_env_state, goal)
         else:
             try:
-                Q_policys = self.policy_meta_net(meta_input)
+                Q_policys = self.policy_meta_net(agent_env_state, goal)
             except Exception as e:
-                meta_input = torch.unsqueeze(meta_input, dim=0)
-                Q_policys = self.policy_meta_net(meta_input)
-            return Q_policys, meta_input
-
+                agent_env_state = torch.unsqueeze(agent_env_state, dim=0)
+                goal = torch.unsqueeze(torch.tensor([goal], dtype=torch.float32, device=device), dim=0)
+                Q_policys = self.policy_meta_net(agent_env_state, goal)
+        return Q_policys
 
 
     def _update_cntr(self):
         if len(self.cntr_memory) < self.batch_size:
             return
 
+        
         sample_size = min(self.batch_size, len(self.cntr_memory))
         exps = self.cntr_memory.sample(sample_size)
 
-        state_tensors = torch.cat([torch.unsqueeze(exp.agent_env_goal_cntr, 0) for exp in exps])
-        non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.cntr_done for exp in exps])), 
-            device=device)
-        try:
-            next_state_non_terminals = torch.cat([torch.unsqueeze(exp.next_agent_env_goal_cntr, 0) 
-            for exp in exps if exp.cntr_done != True])
-        except:
-            print("all states done ......")
-        next_state_Vs = torch.zeros(sample_size, device=device)
-        next_state_Vs[non_terminal_mask] = self.Q_cntr(next_state_non_terminals, 
-                                           target=True)[0].max(1)[0].detach()
         
+        state_batch = torch.cat([torch.unsqueeze(exp.agent_env_cntr, 0) for exp in exps])
+        meta_goal_batch = torch.cat([torch.unsqueeze(exp.meta_goal,0) 
+            for exp in exps])
+        non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.terminal for exp in exps])), 
+            device=device)
+        
+        
+        # calculating V at the next state
+        next_state_Vs = torch.zeros(sample_size, device=device)
+        all_terminal = False
+        try:
+            next_state_non_terminals = torch.cat([torch.unsqueeze(exp.next_agent_env_cntr, 0) 
+                                            for exp in exps if exp.terminal != True])
+        except:
+            all_terminal = True
+        if not all_terminal:
+            next_state_Vs[non_terminal_mask] = self.Q_cntr(next_state_non_terminals, 
+                    meta_goal_batch[non_terminal_mask], target=True).max(1)[0].detach()
+        
+
         # action_batch = torch.cat(batch.action)
-        reward_batch = torch.tensor([exp.int_reward for exp in exps], dtype=torch.float32)
-        action_batch = torch.unsqueeze(torch.tensor([exp.action_idx for exp in exps]), 1)
+        reward_batch = torch.tensor([exp.int_reward for exp in exps], dtype=torch.float32, device=device).detach()
+        action_batch = torch.unsqueeze(torch.tensor([exp.action_idx for exp in exps], device=device), 1).detach()
+        Q_policys = self.Q_cntr(state_batch, meta_goal_batch, target=False).gather(1, action_batch)
 
-        Q_policys = self.Q_cntr(state_tensors, target=False)[0].gather(1, action_batch)
 
-        set_trace()
         try:
             Q_targets = (next_state_Vs * self.gamma) + reward_batch
         except:
             print("Q targets problems...")
-            set_trace()
 
         Q_targets = torch.unsqueeze(Q_targets, 1)
 
@@ -310,32 +313,31 @@ class hDQN:
     def _update_meta(self):
         # ["agent_env_state_0", "goal", "reward", "next_agent_env_state", "next_available_goals", "done"]
 
-        if len(self.meta_memory) < 10:
+        if len(self.meta_memory) < self.meta_batch_size:
             return
+
 
         sample_size = min(self.meta_batch_size, len(self.meta_memory))
         exps = self.meta_memory.sample(sample_size)
         # exps = self.cntr_Transition(*zip(*exps))
 
-        D_in = self.env.D_in
-        state_tensors = torch.cat([torch.unsqueeze(utils.meta_input2(D_in, exp.agent_env_state_0, 
-                            exp.goal), 0) for exp in exps])
-        Q_policys = self.Q_meta(state_tensors, target=False)[0]
-
-        reward_batch = torch.tensor([exp.reward for exp in exps], dtype=torch.float32)
+        state_batch = torch.cat([torch.unsqueeze(exp.agent_env_state_0, 0) for exp in exps])
+        meta_goal_batch = torch.cat([torch.unsqueeze(exp.meta_goal,0) for exp in exps])
+        Q_policys = self.Q_meta(state_batch, meta_goal_batch, target=False)
+        reward_batch = torch.tensor([exp.reward for exp in exps], dtype=torch.float32, device=device)
 
         # non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.terminal for exp in exps])))
         # try:
-        #     next_state_non_terminals = torch.cat([torch.unsqueeze(utils.meta_input2(D_in, 
+        #     next_state_non_terminals = torch.cat([torch.unsqueeze(utils.agent_env_state2(D_in, 
         #         exp.next_agent_env_state, exp.goal), 0) for exp in exps if exp.terminal != True])
         #     next_state_Vs = self.Q_meta(next_state_non_terminals, target=True)[0].detach()
         # except:
         #     pass
 
 
-        Q_targets = torch.zeros((sample_size, 1))
+        Q_targets = torch.zeros((sample_size, 1), device=device)
 
-        next_state_Vs = torch.zeros(sample_size)
+        next_state_Vs = torch.zeros(sample_size, device=device)
         # next_state_Vs[non_terminal_mask] = self.Q_cntr(next_state_non_terminals, 
         #     target=True)[0].max(1)[0].detach()
         # Q_targets = reward_batcht + (next_state_Vs * self.gamma) 
@@ -348,15 +350,15 @@ class hDQN:
                 # if exp.terminal is true, it means that the next state is terminal and we have 
                 # Q(s,.)=0 if s is terminal 
                 
-                try:
-                    intermediate_tensor = torch.cat([torch.unsqueeze(utils.meta_input2(D_in, 
-                                    exp.next_agent_env_state, next_goal), 0)
-                                    for next_goal in exp.next_available_goals])
-                    next_state_V = max(self.Q_meta(intermediate_tensor, target=True)[0]).item()
-                    Q_targets[i,0] +=  self.gamma * (next_state_V)
-                    # Q_targets = (next_state_Vs * self.gamma) + reward_batch
-                except:
-                    pass
+                next_goals = torch.cat([torch.unsqueeze(torch.tensor([next_goal], device=device), 0)
+                                for next_goal in exp.next_available_goals])
+                next_agent_env_states = torch.cat([torch.unsqueeze(exp.next_agent_env_state, 0)
+                                for next_goal in next_goals])
+                
+                next_state_V = max(self.Q_meta(next_agent_env_states, next_goals, target=True)).item()
+                Q_targets[i,0] +=  self.gamma * (next_state_V)
+                # Q_targets = (next_state_Vs * self.gamma) + reward_batch
+
 
 
         self.meta_optimizer.zero_grad()

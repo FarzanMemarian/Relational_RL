@@ -19,11 +19,9 @@ from pdb import set_trace
 class Gridworld: # Environment
     def __init__(self, 
         D_in, 
-        start, 
         n_obj, 
         min_num, 
         max_num,
-        not_moving_reward, 
         game_over_reward, 
         step_reward, 
         current_goal_reward, 
@@ -37,19 +35,14 @@ class Gridworld: # Environment
         self.n_obj = n_obj
         self.min_num = min_num
         self.max_num = max_num
-        self.start = start
         self.grid_mat = torch.zeros((self.D_in, self.D_in),dtype=torch.float32)
-        self.agent_loc = torch.zeros((1,2),dtype=torch.int)
 
         # objects, gridworld and goals
-        self.agent_loc[0,:] = self.start[0,:]
         self.original_objects = self.create_objects()
-
         self.object_idxs = self.place_objects()
-
-        
+        self.agent_loc = torch.zeros((1,2),dtype=torch.int)
+        self.agent_loc[0,:] = self.random_start()
         self.grid_mat_original = copy.deepcopy(self.grid_mat)
-        # self.grid_flat = np.ravel(self.grid_mat).reshape((1,-1)) # 1D array
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
         self.current_target_goal = self.current_objects[0]
@@ -61,7 +54,6 @@ class Gridworld: # Environment
         self.set_actions()
 
         # rewards
-        self.not_moving_reward = not_moving_reward
         self.game_over_reward = game_over_reward
         self.step_reward = step_reward
         self.current_goal_reward = current_goal_reward
@@ -133,16 +125,16 @@ class Gridworld: # Environment
 
     def reset(self): 
         # the function creates the same gridworld as the original
-        self.agent_loc[0,:] = self.start[0,:]
         self.grid_mat = copy.deepcopy(self.grid_mat_original)
         # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.D_in*self.D_in)) # 1D array
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
         self.current_target_goal = self.current_objects[0]
-        return self.start, self.grid_mat
+        self.agent_loc[0,:] = self.random_start()
+        return self.agent_loc, self.grid_mat
 
-    def reset2(self): # whole gridworld is created from the beginning. 
-        self.agent_loc[0,:] = self.start[0,:]
+    def reset_total(self): # whole gridworld is created from the beginning and agent is 
+                    # placed in a random position
         self.original_objects = self.create_objects()
         self.object_idxs = self.place_objects()
         self.grid_mat_original = copy.deepcopy(self.grid_mat)
@@ -150,7 +142,22 @@ class Gridworld: # Environment
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
         self.current_target_goal = self.current_objects[0]
-        return self.start, self.grid_mat
+        self.agent_loc[0,:] = self.random_start()
+        return self.agent_loc, self.grid_mat
+
+    def random_start(self):
+        start = torch.zeros([1,2], dtype=torch.int)
+
+        done = False
+        while not done:
+            i = np.random.choice(self.D_in)
+            j = np.random.choice(self.D_in)
+            if self.grid_mat[i,j] == 0:
+                done = True
+                start[0,0] = i
+                start[0,1] = j
+        return start
+
 
     def remove_object(self, i, j):
         self.grid_mat[i,j] = 0
@@ -182,9 +189,7 @@ class Gridworld: # Environment
                 self.agent_loc[0,1] += 1
 
             self.extr_reward(self.agent_loc)
-        else:
-            # this part should never be executed if the actions are only picked amont the allowable actions
-            reward = self.not_moving_reward
+
 
         return self.agent_loc, self.grid_mat
 
