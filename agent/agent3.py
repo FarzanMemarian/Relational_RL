@@ -35,12 +35,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class cntr_class(nn.Module):
 
-    def __init__(self, last_conv_depth=32, final_conv_dim=3):
+    def __init__(self, last_conv_depth=16, final_conv_dim=3):
         super().__init__()
         # 1 input image channel, 6 output channels, 5x5 square convolution kernel
-        self.conv1 = nn.Conv2d(1,  16, kernel_size=2)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, last_conv_depth, kernel_size=2)
+        self.conv1 = nn.Conv2d(1,  8, kernel_size=2)
+        self.bn1 = nn.BatchNorm2d(8)
+        self.conv2 = nn.Conv2d(8, last_conv_depth, kernel_size=2)
         self.bn2 = nn.BatchNorm2d(last_conv_depth)
         # an affine operation: y = Wx + b
         self.final_conv_dim = final_conv_dim
@@ -48,8 +48,8 @@ class cntr_class(nn.Module):
         self.fc2 = nn.Linear(40, 4)
 
     def forward(self, x, g):
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
         x = x.view(-1, self.num_flat_features(x))
         
         x = self.append_goal(x,g)
@@ -129,18 +129,24 @@ class hDQN:
                 meta_batch_size, 
                 gamma,
                 meta_epsilon, 
-                epsilon, 
+                cntr_epsilon, 
                 tau,
                 cntr_Transition,                
                 cntr_memory_size,
                 meta_Transition,
-                meta_memory_size):
+                meta_memory_size,
+                meta_loss,
+                meta_optimizer,
+                meta_lr,
+                cntr_loss,
+                cntr_optimizer,
+                cntr_lr):
 
         self.env = env
         # self.goal_selected = 0
         # self.goal_success = 0
         self.meta_epsilon = meta_epsilon
-        self.epsilon = epsilon
+        self.cntr_epsilon = cntr_epsilon
         self.batch_size = batch_size
         self.meta_batch_size = meta_batch_size
         self.gamma = gamma
@@ -153,19 +159,38 @@ class hDQN:
         self.cntr_memory = ReplayMemory(self.cntr_memory_size, self.cntr_Transition)
         self.meta_memory = ReplayMemory(self.meta_memory_size, self.meta_Transition)
 
+        
         self.policy_meta_net = transformer.meta_class().to(device)
         self.target_meta_net = transformer.meta_class().to(device)
         self.target_meta_net.load_state_dict(self.policy_meta_net.state_dict())
         self.target_meta_net.eval()
-        self.meta_optimizer = optim.SGD(self.policy_meta_net.parameters(), lr=0.001)
-        self.meta_criterion = nn.MSELoss()
+        self.meta_optimizer, self.meta_criterion = self.set_optim(self.policy_meta_net.parameters(), 
+            meta_optimizer, meta_loss, meta_lr)
         
         self.policy_cntr_net = cntr_class().to(device)
         self.target_cntr_net = cntr_class().to(device)
         self.target_cntr_net.load_state_dict(self.policy_cntr_net.state_dict())
         self.target_cntr_net.eval()
-        self.cntr_optimizer = optim.SGD(self.policy_cntr_net.parameters(), lr=0.001)
-        self.cntr_criterion = nn.MSELoss()
+        self.cntr_optimizer, self.cntr_criterion = self.set_optim(self.policy_cntr_net.parameters(), 
+            cntr_optimizer, cntr_loss, cntr_lr)
+
+    def set_optim(self, params, optimizer_str, loss_str, lr):
+        if optimizer_str == 'SGD':
+            optimizer = optim.SGD(params, lr=lr)
+        if optimizer_str == 'Adam':
+            optimizer = optim.Adam(params, lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, 
+                amsgrad=False)
+        if optimizer_str == 'RMSprop':
+            optimizer = optim.RMSprop(params, lr=lr, alpha=0.99, eps=1e-08, weight_decay=0, 
+                momentum=0, centered=False)
+
+        if loss_str == 'MSELoss':
+            criterion = nn.MSELoss()
+        if loss_str == 'SmoothL1Loss':
+            criterion = nn.SmoothL1Loss()
+
+        return optimizer, criterion
+
 
     def select_goal(self, agent_state):
         if self.meta_epsilon < random.random():
@@ -193,7 +218,7 @@ class hDQN:
     def select_action(self, agent_state, env_state, goal):
         i = agent_state[0,0].item()
         j = agent_state[0,1].item()
-        if random.random() > self.epsilon:
+        if random.random() > self.cntr_epsilon:
             with torch.no_grad():
                 agent_env_state = utils.agent_env_state(agent_state, env_state)
                 action_probs = self.Q_cntr(agent_env_state, goal, False) 
@@ -268,21 +293,21 @@ class hDQN:
         state_batch = torch.cat([torch.unsqueeze(exp.agent_env_cntr, 0) for exp in exps])
         meta_goal_batch = torch.cat([torch.unsqueeze(exp.meta_goal,0) 
             for exp in exps])
-        non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.terminal for exp in exps])), 
+        non_cntr_done_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.cntr_done for exp in exps])), 
             device=device)
         
         
         # calculating V at the next state
         next_state_Vs = torch.zeros(sample_size, device=device)
-        all_terminal = False
+        all_cntr_done = False
         try:
-            next_state_non_terminals = torch.cat([torch.unsqueeze(exp.next_agent_env_cntr, 0) 
-                                            for exp in exps if exp.terminal != True])
+            next_state_non_cntr_dones = torch.cat([torch.unsqueeze(exp.next_agent_env_cntr, 0) 
+                                            for exp in exps if exp.cntr_done != True])
         except:
-            all_terminal = True
-        if not all_terminal:
-            next_state_Vs[non_terminal_mask] = self.Q_cntr(next_state_non_terminals, 
-                    meta_goal_batch[non_terminal_mask], target=True).max(1)[0].detach()
+            all_cntr_done = True
+        if not all_cntr_done:
+            next_state_Vs[non_cntr_done_mask] = self.Q_cntr(next_state_non_cntr_dones, 
+                    meta_goal_batch[non_cntr_done_mask], target=True).max(1)[0].detach()
         
 
         # action_batch = torch.cat(batch.action)
@@ -292,7 +317,7 @@ class hDQN:
 
 
         try:
-            Q_targets = (next_state_Vs * self.gamma) + reward_batch
+            Q_targets = reward_batch + (next_state_Vs * self.gamma)
         except:
             print("Q targets problems...")
 

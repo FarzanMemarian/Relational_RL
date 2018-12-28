@@ -136,8 +136,8 @@ class Gridworld: # Environment
     def reset_total(self): # whole gridworld is created from the beginning and agent is 
                     # placed in a random position
         self.original_objects = self.create_objects()
+        self.grid_mat = torch.zeros((self.D_in, self.D_in),dtype=torch.float32)
         self.object_idxs = self.place_objects()
-        self.grid_mat_original = copy.deepcopy(self.grid_mat)
         # self.grid_flat = np.ravel(self.grid_mat).reshape((1,self.D_in*self.D_in)) # 1D array
         self.current_objects = copy.deepcopy(self.original_objects)
         self.selected_goals = []
