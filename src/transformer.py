@@ -309,7 +309,6 @@ class meta_class(nn.Module):
         goal_tensor = torch.zeros((batch_size, n_squared, 1), device=device)
         for i in range(batch_size):
             goal_tensor[i,:,0] = g[i,0]
-        set_trace()
         x = torch.cat((x,goal_tensor), 2)
         return x
 

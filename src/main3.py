@@ -6,7 +6,7 @@ from collections import namedtuple
 import sys
 sys.path.append('../')
 from envs.gridworld3 import Gridworld
-from agent.agent3 import hDQN, cntr_class
+from agent.agent3 import hDQN, cntr_net_conv_MLP, cntr_net_MLP
 import transformer
 from utils import utils
 import copy
@@ -19,29 +19,29 @@ import torch.optim as optim
 import json
 from pdb import set_trace 
 import pickle
-
+import time
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def init(args):
-    
-    NOTE = 'learning based only on random exploration'
+
+    NOTE = "cntr training, saved env, reset" 
 
     # *****************
     init_vars = {}
-    init_vars["fileName"] = "3_cntr_temp"
+    init_vars["fileName"] = "3_cntr_dev"
+    init_vars["to_read_from_folder"] = "3_cntr_dev" # folder name for trained cntr network
     init_vars["main_function"]  = ["train_only_cntr","train_cntr_meta","test_cntr","test_both"][0]
     init_vars["num_epis"] = 300000
     #  WRITE PERIODS
     init_vars["stat_period_dhrl"] = 100
     init_vars["stat_period_cntr"] = 100
-    init_vars["reset_type"] = ["reset_total","reset"][0] 
+    init_vars["reset_type"] = ["reset","reset_total"][1] 
+    init_vars["run_mode"] = ["restart","continue"][0]
     init_vars["no_anneal"] = False
     # *****************
 
-    
-
-    # LOSS prams
+    # LOSS params
     meta_loss = ["SmoothL1Loss", "MSEloss"][0]
     meta_optimizer = ["Adam", "RMSprop", "SGD"][0]  
     meta_lr = 0.0001
@@ -49,6 +49,9 @@ def init(args):
     cntr_loss = ["SmoothL1Loss", "MSEloss"][0]
     cntr_optimizer = ["Adam", "RMSprop", "SGD"][0]
     cntr_lr = 0.0001
+
+    # Network type
+    cntr_network = ["conv_MLP","MLP"][0] 
 
     # GRID WORLD GEOMETRICAL PARAMETERS
     D_in = 5 # pick odd numbers
@@ -63,32 +66,30 @@ def init(args):
     final_goal_reward = 100
 
     # int REWARDS
-    int_goal_reward = 20
-    int_step_reward = -1
-    int_wrong_goal_reward = -20
+    int_goal_reward = 1
+    int_step_reward = 0
+    int_wrong_goal_reward = -1
 
     # CLAMPING
     meta_clamp = False
     cntr_clamp = False
 
     # PARAMETERS OF META 
-    meta_batch_size = 35
-    init_vars["meta_eps_start"] = 1
+    meta_batch_size = 128
+    init_vars["meta_eps_start"] = 0.9
     init_vars["meta_eps_end"] = 0.05
-    init_vars["meta_eps_decay"] = 200
-    meta_memory_size = 10000
-    
+    init_vars["meta_eps_decay"] = 100000
+    meta_memory_size = 100000
 
     # PARAMETERS OF CNTR
-    batch_size = 35
-    gamma = 0.975
-    init_vars["cntr_eps_start"] = 0.9
+    batch_size = 128
+    gamma = 0.9
+    init_vars["cntr_eps_start"] = 1
     init_vars["cntr_eps_end"] = 0.05
     init_vars["cntr_eps_decay"] = 100000
     tau = 0.001
-    cntr_memory_size = 10000
+    cntr_memory_size = 100000
     
-
     cntr_Transition = namedtuple("cntr_Transition", 
         ["agent_env_cntr", "action_idx", "int_reward", "next_agent_env_cntr", "meta_goal", 
         "next_available_actions", "cntr_done"])
@@ -128,10 +129,11 @@ def init(args):
                 cntr_optimizer = cntr_optimizer,
                 cntr_lr = cntr_lr,
                 meta_clamp = meta_clamp,
-                cntr_clamp = cntr_clamp
+                cntr_clamp = cntr_clamp,
+                cntr_network = cntr_network
                 )
 
-    stats = {
+    params_cntr_run = {
             'NOTE' : NOTE,
             "fileName" : init_vars["fileName"],
             "main_function" : init_vars["main_function"],
@@ -140,8 +142,39 @@ def init(args):
             "stat_period_cntr" : init_vars["stat_period_cntr"],
             "reset_type" : init_vars["reset_type"], 
             "no_anneal" : init_vars["no_anneal"], 
+            "cntr_clamp" : cntr_clamp,
+            "cntr_network" : cntr_network,
+            "D_in" : D_in, 
+            "n_obj":n_obj, 
+            "min_num" : min_num,
+            "max_num" : max_num,
+            "int_goal_reward":int_goal_reward, 
+            "int_step_reward":int_step_reward, 
+            "int_wrong_goal_reward":int_wrong_goal_reward,
+            "batch_size":batch_size,
+            "gamma":gamma,
+            "cntr_eps_start" : init_vars["cntr_eps_start"],
+            "cntr_eps_end" : init_vars["cntr_eps_end"],
+            "cntr_eps_decay" : init_vars["cntr_eps_decay"],
+            "tau" : tau,
+            "cntr_loss" : cntr_loss,
+            "cntr_optimizer" : cntr_optimizer,
+            "cntr_lr" : cntr_lr
+            }
+
+    params_dhrl_run = {
+            'NOTE' : NOTE,
+            "fileName" : init_vars["fileName"],
+            "to_read_from_folder" : init_vars["to_read_from_folder"],
+            "main_function" : init_vars["main_function"],
+            "num_epis" : init_vars["num_epis"],
+            "stat_period_dhrl" : init_vars["stat_period_dhrl"],
+            "stat_period_cntr" : init_vars["stat_period_cntr"],
+            "reset_type" : init_vars["reset_type"], 
+            "no_anneal" : init_vars["no_anneal"], 
             "meta_clamp" : meta_clamp,
             "cntr_clamp" : cntr_clamp,
+            "cntr_network" : cntr_network,
             "D_in" : D_in, 
             "n_obj":n_obj, 
             "min_num" : min_num,
@@ -170,22 +203,36 @@ def init(args):
             "meta_lr" : meta_lr,
             "cntr_loss" : cntr_loss,
             "cntr_optimizer" : cntr_optimizer,
-            "cntr_lr" : cntr_lr,
+            "cntr_lr" : cntr_lr
             }
 
-    
-    logs_address, models_address = addresses(init_vars)
-    if init_vars["main_function"]  == "train_only_cntr" or init_vars["main_function"] == "train_cntr_meta":
+    logs_address, models_address, _ = addresses(init_vars)
+    if init_vars["main_function"]  == "train_only_cntr":
         create_directories(init_vars)
-        with open(logs_address+'stats.txt','w') as f:
-            for key, value in stats.items():
+        with open(logs_address+'params_cntr_run.txt','w') as f:
+            for key, value in params_cntr_run.items():
                 f.write('{0}: {1}\n'.format(key, value))
-        with open(models_address+'stats.txt','w') as f:
-            for key, value in stats.items():
+        with open(models_address+'params_cntr_run.txt','w') as f:
+            for key, value in params_cntr_run.items():
                 f.write('{0}: {1}\n'.format(key, value))
+
+    if init_vars["main_function"]  == "train_cntr_meta":
+        create_directories(init_vars)
+        with open(logs_address+'params_dhqn_run.txt','w') as f:
+            for key, value in params_dhrl_run.items():
+                f.write('{0}: {1}\n'.format(key, value))
+        with open(models_address+'params_dhqn_run.txt','w') as f:
+            for key, value in params_dhrl_run.items():
+                f.write('{0}: {1}\n'.format(key, value))
+
+    if init_vars["main_function"]  == "test_cntr":
+        create_directories(init_vars)
+
     return env, agent, init_vars
 
 def create_directories(init_vars):
+    # this function deletes the directory if it already exists 
+    # and recreates it. 
     cmd = 'rm -rf ../logs/' + init_vars["fileName"]
     os.system(cmd)
     cmd = 'mkdir ../logs/' + init_vars["fileName"]
@@ -199,13 +246,15 @@ def create_directories(init_vars):
 def addresses(init_vars):
     logs_address = "../logs/" + init_vars["fileName"] + "/"
     models_address = "../saved_models/" + init_vars["fileName"] + "/"
+    read_cntr_address = "../saved_models/" + init_vars["to_read_from_folder"] + "/"
+    return logs_address, models_address, read_cntr_address
 
-    return logs_address, models_address
 
 def train_DHRL(env, agent, init_vars):
+    # this should only be run after train_cntr has been run
 
-    # creating the folders
-    logs_address, models_address = addresses(init_vars)
+    # creating the folder names
+    logs_address, models_address, read_cntr_address = addresses(init_vars)
     num_epis = init_vars["num_epis"]
     meta_eps_start = init_vars["meta_eps_start"]
     meta_eps_end = init_vars["meta_eps_end"]
@@ -214,21 +263,43 @@ def train_DHRL(env, agent, init_vars):
     cntr_eps_end = init_vars["cntr_eps_end"]
     cntr_eps_decay = init_vars["cntr_eps_decay"]
 
+    # Load models
+    if agent.cntr_network_name == "conv_MLP":
+        agent.policy_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+        agent.target_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+    if agent.cntr_network_name == "MLP":
+        agent.policy_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+        agent.target_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+    
+    agent.policy_cntr_net.load_state_dict(torch.load(read_cntr_address + "policy_cntr_net_train_cntr.pt"))
+    agent.cntr_optimizer, agent.cntr_criterion = agent.set_optim(agent.policy_cntr_net.parameters(), 
+            agent.cntr_optimizer_name, agent.cntr_loss_name, agent.cntr_lr_name)   
+    agent.target_cntr_net.load_state_dict(torch.load(read_cntr_address + "target_cntr_net_train_cntr.pt"))
+    agent.target_cntr_net.eval()
+
+    if init_vars["reset_type"] == 'reset': 
+        env_state = torch.load(read_cntr_address + "env_state.pt")
+        env.env_state = copy.deepcopy(env_state)
+        env.env_state_original = copy.deepcopy(env_state)
+
     visits = np.zeros((env.D_in, env.D_in))
-    anneal_factor = (1.0-0.1)/(num_epis)
-    print("Annealing factor: " + str(anneal_factor))
     game_won_counter = 0
     game_over_counter = 0
     game_result_history = []
+    cntr_result_history = []
     meta_exp_counter = 0
     goal_selected = 0
     cntr_success = 0
     cntr_failure = 0
+    meta_success = 0
+    meta_failure = 0
     cntr_success_stats = []
+    meta_success_stats = []
     cntr_logs_list = [] # each element should be [cntr_steps, meta_goal_reached, non_meta_goal_reached, episode_steps]
     hdqn_logs_list = [] # each slement should be [episode_steps, game_won]
     loss_cntr_stat = []
     loss_meta_stat = []
+    batch_episode_counter = 0
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
         if init_vars["reset_type"] == 'reset': 
@@ -243,6 +314,10 @@ def train_DHRL(env, agent, init_vars):
         while not terminal:  # this loop is for meta-cntr
                              # which means while the game is not lost or won
             meta_goal = agent.select_goal(agent_state)  # meta cntr selects a goal
+            if meta_goal == env.current_target_goal:
+                meta_success += 1
+            else:
+                meta_failure += 1 
             goal_selected += 1
             print("\nNew Goal: "  + str(meta_goal) + "\n")
             total_extr_reward = 0
@@ -262,21 +337,22 @@ def train_DHRL(env, agent, init_vars):
                 
                 i, j = next_agent_state[0,0].item(), next_agent_state[0,1].item()
                 visits[i, j] += 1
-                current_element = int(env.grid_mat[i,j].item())
+                current_element = int(env.env_state[i,j].item())
                 meta_goal_reached = current_element == meta_goal
                 current_target_reached = current_element == env.current_target_goal
                 
-                if current_element != meta_goal and current_element != 0:
+                if current_element != 0 and not meta_goal_reached:
                     non_meta_goal_reached = True
                 else:
                     non_meta_goal_reached = False
+                # print ("state before action ----> " + "[" + str(agent_state[0,0].item()) +", " + 
+                #         str(agent_state[0,1].item()) + "]" )
                 # print ("action ----> "  + action)
-                # print ("state after action ----> " + "[" + str(i) +", " + 
-                #         str(j) + "]" )
+                # print ("state after action ----> " + "[" + str(i) +", " + str(j) + "]" )
                 # print ("---------------------")
-                game_over, game_won = env.is_terminal(nextvpn.utexas.edu_agent_state)
+                game_over, game_won = env.is_terminal(next_agent_state)
                 terminal = game_over or game_won # terminal refers to next state
-                cntr_done = non_meta_goal_reached
+                cntr_done = non_meta_goal_reached or meta_goal_reached
 
                 if current_target_reached:
                     # print("CURRENT TARGET REACHED! ")
@@ -327,16 +403,16 @@ def train_DHRL(env, agent, init_vars):
                     # print("********************")
 
 
-                # if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
+                # if env.env_state[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
-                agent_env_cntr = utils.agent_env_state(agent_state, env_state)
-                next_agent_env_cntr = utils.agent_env_state(next_agent_state, next_env_state)
+                agent_env_state = utils.agent_env_state(agent_state, env_state)
+                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state)
                 next_available_actions = env.allowable_actions[i,j]
 
                 # if the state is terminal, the experiment will not even be added to the cntr_Transition
                 # or the MetaEcperience, only the next_state can be terminal
-                exp_cntr = copy.deepcopy([agent_env_cntr, action_idx, int_reward,  
-                    next_agent_env_cntr, 
+                exp_cntr = copy.deepcopy([agent_env_state, action_idx, int_reward,  
+                    next_agent_env_state, 
                     torch.tensor([meta_goal], dtype=torch.float, device=device), 
                     next_available_actions, cntr_done])
                 agent.store(*exp_cntr, meta=False)
@@ -345,10 +421,10 @@ def train_DHRL(env, agent, init_vars):
                 loss_cntr_epis += loss_cntr
                 loss_meta_epis += loss_meta
                 total_extr_reward += extr_reward
-                agent_state = next_agent_state
-                env_state = next_env_state
+                agent_state = copy.deepcopy(next_agent_state)
+                env_state = copy.deepcopy(next_env_state)
                 if current_element != 0:
-                    cntr_logs_list.append([cntr_steps, meta_goal_reached, current_target_reached, 
+                    cntr_logs_list.append([meta_goal_reached, current_target_reached, cntr_steps, 
                         episode_steps, episode])
 
             next_agent_env_state = utils.agent_env_state(agent_state, env_state)
@@ -363,7 +439,7 @@ def train_DHRL(env, agent, init_vars):
         print("meta_epsilon: " + str(agent.meta_epsilon))
         print("cntr_epsilon: " + str(agent.cntr_epsilon))
         loss_cntr_stat.append(loss_cntr_epis/episode_steps)
-        loss_meta_stat.append(meta_loss/episode_steps)
+        loss_meta_stat.append(loss_meta_epis/episode_steps)
         if not init_vars["no_anneal"]:
             # Annealing 
             agent.meta_epsilon = meta_eps_end + (meta_eps_start - meta_eps_end) * \
@@ -382,28 +458,42 @@ def train_DHRL(env, agent, init_vars):
             # if(agent.meta_epsilon) < 0.05:
             #     agent.meta_epsilon = 0.05
 
-        if episode != 0 and episode % init_vars["stat_period_dhrl"] == 0:
+        if episode != 0 and episode % (init_vars["stat_period_dhrl"]-1) == 0:
             
-            success_ratio = cntr_success/(cntr_success+cntr_failure)
-            cntr_success_stats.append([cntr_success,cntr_failure,goal_selected, success_ratio, 
-                np.mean(loss_cntr_stat), np.mean(loss_meta_stat), batch_episode_counter])
-            batch_episode_counter += 1
+            cntr_success_ratio = cntr_success/(cntr_success+cntr_failure)
+            cntr_success_stats.append([cntr_success, cntr_failure, goal_selected, cntr_success_ratio, 
+                np.mean(loss_cntr_stat), batch_episode_counter])
+            loss_cntr_stat = []            
             cntr_success = 0
             cntr_failure = 0
+            meta_success_ratio = meta_success/(meta_success+meta_failure)
+            meta_success_stats.append([meta_success, meta_failure, goal_selected, meta_success_ratio,
+                np.mean(loss_meta_stat), batch_episode_counter])
+            loss_meta_stat = []
+            meta_success = 0
+            meta_failure = 0
             goal_selected = 0
-
+            batch_episode_counter += 1
             print ("SAVING THE LOG FILES .....")
             with open(logs_address + "cntr_success_stats.txt", "w") as file:
-                file.write("cntr_success,cntr_failure,goal_selected, success_ratio, average_loss \
+                file.write("cntr_success, cntr_failure, goal_selected, success_ratio, cntr_loss, \
                     batch_episode_counter \n")
                 for r in cntr_success_stats:
-                    file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>6.3f} {5:>6.3f} {6:>3} \n'.format(
-                        r[0],r[1],r[2],r[3],r[4],r[5],r[6]))
+                    file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>14.10f} {5:>3} \n'.format(
+                        r[0],r[1],r[2],r[3],r[4],r[5]))
+
+            with open(logs_address + "meta_success_stats.txt", "w") as file:
+                file.write("meta_success, meta_failure, goal_selected, success_ratio, meta_loss, \
+                    batch_episode_counter \n")
+                for r in cntr_success_stats:
+                    file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>14.10f} {5:>3} \n'.format(
+                        r[0],r[1],r[2],r[3],r[4],r[5]))
+
 
             with open(logs_address + "game_stats.txt", "w") as file:
                 file.write("game_won_counter: {}\n".format(game_won_counter)) 
                 file.write("game_over_counter: {}\n".format(game_over_counter))
-                file.writet("game won ratio: {}\n".format(game_won_counter/(game_over_counter+game_won_counter)))
+                file.write("game won ratio: {}\n".format(game_won_counter/(game_over_counter+game_won_counter)))
 
             with open(logs_address + "game_result_history.txt", "w") as file:
                 file.write("game_result, episode \n")
@@ -414,25 +504,26 @@ def train_DHRL(env, agent, init_vars):
                 file.write("episode_steps, game_won, episode \n")
                 for line in hdqn_logs_list:
                     file.write('{0:>5} {1:>6} {2:>6} \n'.format(line[0],line[1],line[2]))
-            with open(logs_address + "cntr_logs_list.txt", "w") as file:
-                file.write("cntr_steps, meta_goal_reached, current_target_reached, episode_steps, episode \n")
-                for line in cntr_logs_list:
-                        file.write('{0:>5} {1:>6} {2:>6} {3:>6} {4:>6} \n'.format(line[0],
-                            line[1],line[2],line[3],line[4]))
+            # with open(logs_address + "cntr_logs_list_hdq.txt", "w") as file:
+            #     file.write("meta_goal_reached, current_target_reached, cntr_steps, episode_steps, episode \n")
+            #     for line in cntr_logs_list:
+            #             file.write('{0:>6} {1:>6} {2:>6} {3:>6} {4:>6} \n'.format(line[0],
+            #                 line[1],line[2],line[3],line[4]))
 
 
 
             print ("SAVING THE MODELS .............")  
             print ()
-            torch.save(agent.policy_meta_net.state_dict(), models_address + "policy_meta_net")
-            torch.save(agent.target_meta_net.state_dict(), models_address + "target_meta_net")
-            torch.save(agent.policy_cntr_net.state_dict(), models_address + "policy_cntr_net")
-            torch.save(agent.target_cntr_net.state_dict(), models_address + "target_cntr_net")
+            torch.save(agent.policy_meta_net.state_dict(), models_address + "policy_meta_net.pt")
+            torch.save(agent.target_meta_net.state_dict(), models_address + "target_meta_net.pt")
+            torch.save(agent.policy_cntr_net.state_dict(), models_address + "policy_cntr_net.pt")
+            torch.save(agent.target_cntr_net.state_dict(), models_address + "target_cntr_net.pt")
+
 
 def train_cntr(env, agent, init_vars):
 
     # creating the folders
-    logs_address, models_address = addresses(init_vars)
+    logs_address, models_address, _ = addresses(init_vars)
     num_epis = init_vars["num_epis"]
     meta_eps_start = init_vars["meta_eps_start"]
     meta_eps_end = init_vars["meta_eps_end"]
@@ -441,9 +532,11 @@ def train_cntr(env, agent, init_vars):
     cntr_eps_end = init_vars["cntr_eps_end"]
     cntr_eps_decay = init_vars["cntr_eps_decay"]
 
+    # save the gridworld to be used for eval later
+    if init_vars["reset_type"] == "reset":
+        torch.save(env.env_state_original, models_address + "env_state.pt")
+
     visits = np.zeros((env.D_in, env.D_in))
-    anneal_factor = (1.0-0.1)/(num_epis)
-    print("Annealing factor: " + str(anneal_factor))
     game_won_counter = 0
     game_over_counter = 0
     cntr_result_history = []
@@ -455,6 +548,8 @@ def train_cntr(env, agent, init_vars):
     cntr_logs_list = [] # each element should be [cntr_steps, meta_goal_reached]
     loss_cntr_stat = []
     batch_episode_counter = 0
+    start_stat_period_time = time.time()
+    update_stat_period_time_accum = 0
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
 
@@ -480,26 +575,28 @@ def train_cntr(env, agent, init_vars):
                 episode_steps += 1
                 action_idx, action = agent.select_action(agent_state, env_state, meta_goal) # cntr selects an action among permitable actions
                 # print(str((state,action)) + "; ")
+
                 next_agent_state, next_env_state = env.step(action_idx) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
+
                 int_reward = env.int_reward(next_agent_state, meta_goal)
                 
                 i, j = next_agent_state[0,0].item(), next_agent_state[0,1].item()
                 visits[i, j] += 1
-                current_element = int(env.grid_mat[i,j].item())
+                current_element = int(env.env_state[i,j].item())
                 meta_goal_reached = current_element == meta_goal
                 current_target_reached = current_element == env.current_target_goal
-                if current_element != meta_goal and current_element != 0:
+                if current_element != 0 and not meta_goal_reached:
                     non_meta_goal_reached = True
                 else:
                     non_meta_goal_reached = False
-
+                # print ("state before action ----> " + "[" + str(agent_state[0,0].item()) +", " + 
+                #         str(agent_state[0,1].item()) + "]" )
                 # print ("action ----> "  + action)
-                # print ("state after action ----> " + "[" + str(i) +", " + 
-                #         str(j) + "]" )
+                # print ("state after action ----> " + "[" + str(i) +", " + str(j) + "]" )
                 # print ("---------------------")
                 game_over, game_won = env.is_terminal(next_agent_state)
                 terminal = game_over or game_won # terminal refers to next state
-                cntr_done = non_meta_goal_reached or terminal
+                cntr_done = non_meta_goal_reached or meta_goal_reached
 
                 if current_target_reached:
                     # print("CURRENT TARGET REACHED! ")
@@ -548,7 +645,7 @@ def train_cntr(env, agent, init_vars):
                     # print("********************")
 
 
-                # if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
+                # if env.env_state[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
 
                 agent_env_state = utils.agent_env_state(agent_state, env_state)
@@ -561,22 +658,23 @@ def train_cntr(env, agent, init_vars):
                     next_agent_env_state, torch.tensor([meta_goal], dtype=torch.float, device=device), 
                     next_available_actions, cntr_done])
                 agent.store(*exp_cntr, meta=False)
+                start_update_time = time.time()
                 loss_cntr = agent.update(meta=False)
+                end_update_time = time.time()
+                update_stat_period_time_accum += end_update_time - start_update_time
                 loss_cntr_epis += loss_cntr
 
-                agent_state = next_agent_state
-                env_state = next_env_state
+                agent_state = copy.deepcopy(next_agent_state)
+                env_state = copy.deepcopy(next_env_state)
 
                 if current_element != 0:
-                    cntr_logs_list.append([cntr_steps, meta_goal_reached, current_target_reached, 
+                    cntr_logs_list.append([meta_goal_reached, current_target_reached, cntr_steps,  
                         episode_steps, episode])
 
 
 
-        # hdqn_logs_list.append([episode_steps, game_won])
-        # print("meta_epsilon: " + str(agent.meta_epsilon))
+        #  THIS IS THE END OF ONE EPISODE
         print("cntr_epsilon: " + str(agent.cntr_epsilon))
-
         loss_cntr_stat.append(loss_cntr_epis/episode_steps)
         if not init_vars["no_anneal"]:
             # Annealing 
@@ -596,12 +694,15 @@ def train_cntr(env, agent, init_vars):
 
 
         
-        if episode != 0 and episode % init_vars["stat_period_cntr"] == 0:
+        if episode != 0 and episode % (init_vars["stat_period_cntr"]-1) == 0:
 
+            elapsed_stat_period_time = time.time() - start_stat_period_time
 
             success_ratio = cntr_success/(cntr_success+cntr_failure)
             cntr_success_stats.append([cntr_success,cntr_failure,goal_selected, success_ratio, 
-                np.mean(loss_cntr_stat), batch_episode_counter])
+                np.mean(loss_cntr_stat), batch_episode_counter, update_stat_period_time_accum, 
+                elapsed_stat_period_time])
+            loss_cntr_stat = []
             batch_episode_counter += 1
             cntr_success = 0
             cntr_failure = 0
@@ -609,10 +710,12 @@ def train_cntr(env, agent, init_vars):
             print ("SAVING THE LOG FILES .....")
             with open(logs_address + "cntr_success_stats.txt", "w") as file:
                 file.write("cntr_success,cntr_failure,goal_selected, success_ratio, cntr_loss, \
-                    batch_episode_counter \n")
+                    batch_episode_counter, update_stat_period_time_accum(secs), elapsed_stat_period_time\n")
                 for r in cntr_success_stats:
-                    file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>6.3f} {5:>3} \n'.format(
-                        r[0],r[1],r[2],r[3],r[4],r[5]))
+                    file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>14.10f} {5:>3} {6:>6.2f} {7:>6.2f}\n'.format(
+                        r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7]))
+
+  
 
             with open(logs_address + "cntr_result_history.txt", "w") as file:
                 file.write("cntr_result, episode \n")
@@ -621,38 +724,52 @@ def train_cntr(env, agent, init_vars):
 
 
             with open(logs_address + "cntr_logs_list.txt", "w") as file:
-                file.write("cntr_steps, meta_goal_reached, current_target_reached, episode_steps, episode \n")
+                file.write("meta_goal_reached, current_target_reached, cntr_steps, episode_steps, episode \n")
                 for line in cntr_logs_list:
-                        file.write('{0:>5} {1:>6} {2:>6} {3:>6} {4:>6} \n'.format(line[0],
+                        file.write('{0:>6} {1:>6} {2:>6} {3:>6} {4:>6} \n'.format(line[0],
                             line[1],line[2],line[3],line[4]))
 
             print ("SAVING THE MODELS .............")  
             print ()
-            torch.save(agent.policy_cntr_net.state_dict(), models_address + "policy_cntr_net_train_cntr")
-            torch.save(agent.target_cntr_net.state_dict(), models_address + "target_cntr_net_train_cntr")
+            torch.save(agent.policy_cntr_net.state_dict(), models_address + "policy_cntr_net_train_cntr.pt")
+            torch.save(agent.target_cntr_net.state_dict(), models_address + "target_cntr_net_train_cntr.pt")
+
+            start_stat_period_time = time.time()
+            update_stat_period_time_accum = 0
+
+
 
 def test_cntr(env, agent, init_vars):
 
-    # creating the folders
-    logs_address, models_address = addresses(init_vars)
+    logs_address, models_address, read_cntr_address = addresses(init_vars)
     num_epis = init_vars["num_epis"]
-
+    meta_eps_start = init_vars["meta_eps_start"]
+    meta_eps_end = init_vars["meta_eps_end"]
+    meta_eps_decay = init_vars["meta_eps_decay"]
+    cntr_eps_start = init_vars["cntr_eps_start"]
+    cntr_eps_end = init_vars["cntr_eps_end"]
+    cntr_eps_decay = init_vars["cntr_eps_decay"]
 
     # Load models
-    agent.policy_cntr_net = cntr_class(ndim=env.D_in).to(device)
-    agent.policy_cntr_net.load_state_dict(torch.load(models_address + "policy_cntr_net_train_cntr"))
-    agent.policy_cntr_net.eval()
-
-
-    agent.target_cntr_net = cntr_class(ndim=env.D_in).to(device)
-    agent.target_cntr_net.load_state_dict(torch.load(models_address + "target_cntr_net_train_cntr"))
+    if agent.cntr_network_name == "conv_MLP":
+        agent.policy_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+        agent.target_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+    if agent.cntr_network_name == "MLP":
+        agent.policy_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+        agent.target_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+    
+    agent.policy_cntr_net.load_state_dict(torch.load(read_cntr_address + "policy_cntr_net_train_cntr.pt"))
+    agent.cntr_optimizer, agent.cntr_criterion = agent.set_optim(agent.policy_cntr_net.parameters(), 
+            agent.cntr_optimizer_name, agent.cntr_loss_name, agent.cntr_lr_name)   
+    agent.target_cntr_net.load_state_dict(torch.load(read_cntr_address + "target_cntr_net_train_cntr.pt"))
     agent.target_cntr_net.eval()
 
-    
-
+    if init_vars["reset_type"] == 'reset': 
+        env_state = torch.load(read_cntr_address + "env_state.pt")
+        env.env_state = copy.deepcopy(env_state)
+        env.env_state_original = copy.deepcopy(env_state)
 
     visits = np.zeros((env.D_in, env.D_in))
-
     game_won_counter = 0
     game_over_counter = 0
     cntr_result_history = []
@@ -662,11 +779,10 @@ def test_cntr(env, agent, init_vars):
     cntr_failure = 0
     cntr_success_stats = []
     cntr_logs_list = [] # each element should be [cntr_steps, meta_goal_reached]
+    loss_cntr_stat = []
     batch_episode_counter = 0
 
-    # CNTR EPSILONG IS FIXED AT A SMALL VALUE
-    agent.cntr_epsilon = 0.05
-
+    agent.cntr_epsilon = 0.05 # fixed at a small number
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
 
@@ -674,10 +790,10 @@ def test_cntr(env, agent, init_vars):
             agent_state, env_state = env.reset() 
         if init_vars["reset_type"] == 'reset_total':
             agent_state, env_state = env.reset_total() 
-
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
         non_meta_goal_reached = False
+        loss_cntr_epis = 0
         episode_steps = 0
         while not terminal:  # this loop is for meta-cntr
                              # which means while the game is not lost or won
@@ -691,26 +807,28 @@ def test_cntr(env, agent, init_vars):
                 episode_steps += 1
                 action_idx, action = agent.select_action(agent_state, env_state, meta_goal) # cntr selects an action among permitable actions
                 # print(str((state,action)) + "; ")
+
                 next_agent_state, next_env_state = env.step(action_idx) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
+
                 int_reward = env.int_reward(next_agent_state, meta_goal)
                 
                 i, j = next_agent_state[0,0].item(), next_agent_state[0,1].item()
                 visits[i, j] += 1
-                current_element = int(env.grid_mat[i,j].item())
+                current_element = int(env.env_state[i,j].item())
                 meta_goal_reached = current_element == meta_goal
                 current_target_reached = current_element == env.current_target_goal
-                if current_element != meta_goal and current_element != 0:
+                if current_element != 0 and not meta_goal_reached:
                     non_meta_goal_reached = True
                 else:
                     non_meta_goal_reached = False
-
+                # print ("state before action ----> " + "[" + str(agent_state[0,0].item()) +", " + 
+                #         str(agent_state[0,1].item()) + "]" )
                 # print ("action ----> "  + action)
-                # print ("state after action ----> " + "[" + str(i) +", " + 
-                #         str(j) + "]" )
+                # print ("state after action ----> " + "[" + str(i) +", " + str(j) + "]" )
                 # print ("---------------------")
                 game_over, game_won = env.is_terminal(next_agent_state)
                 terminal = game_over or game_won # terminal refers to next state
-                cntr_done = non_meta_goal_reached or terminal
+                cntr_done = non_meta_goal_reached or meta_goal_reached
 
                 if current_target_reached:
                     # print("CURRENT TARGET REACHED! ")
@@ -759,7 +877,7 @@ def test_cntr(env, agent, init_vars):
                     # print("********************")
 
 
-                # if env.grid_mat[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
+                # if env.env_state[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
 
                 agent_env_state = utils.agent_env_state(agent_state, env_state)
@@ -768,55 +886,56 @@ def test_cntr(env, agent, init_vars):
 
                 # if the state is terminal, the experiment will not even be added to the cntr_Transition
                 # or the MetaEcperience, only the next_state can be terminal
-                exp_cntr = copy.deepcopy([agent_env_state, action_idx, int_reward,  
-                    next_agent_env_state, torch.tensor([meta_goal], dtype=torch.float, device=device), 
-                    next_available_actions, cntr_done])
-                agent.store(*exp_cntr, meta=False)
+                # exp_cntr = copy.deepcopy([agent_env_state, action_idx, int_reward,  
+                #     next_agent_env_state, torch.tensor([meta_goal], dtype=torch.float, device=device), 
+                #     next_available_actions, cntr_done])
+                # agent.store(*exp_cntr, meta=False)
+                # loss_cntr = agent.update(meta=False)
 
-                agent_state = next_agent_state
-                env_state = next_env_state
+                # loss_cntr_epis += loss_cntr
+
+                agent_state = copy.deepcopy(next_agent_state)
+                env_state = copy.deepcopy(next_env_state)
 
                 if current_element != 0:
-                    cntr_logs_list.append([cntr_steps, meta_goal_reached, current_target_reached, 
+                    cntr_logs_list.append([meta_goal_reached, current_target_reached, cntr_steps,  
                         episode_steps, episode])
 
 
 
-        # hdqn_logs_list.append([episode_steps, game_won])
-        # print("meta_epsilon: " + str(agent.meta_epsilon))
+        #  THIS IS THE END OF ONE EPISODE
         print("cntr_epsilon: " + str(agent.cntr_epsilon))
-        loss_cntr_stat.append(loss_cntr_epis/episode_steps)
+        # loss_cntr_stat.append(loss_cntr_epis/episode_steps)
 
 
-        if episode != 0 and episode % init_vars["stat_period_cntr"] == 0:
+        if episode != 0 and episode % (init_vars["stat_period_cntr"]-1) == 0:
+
             success_ratio = cntr_success/(cntr_success+cntr_failure)
             cntr_success_stats.append([cntr_success,cntr_failure,goal_selected, success_ratio, 
-                np.mean(loss_cntr_stat), np.mean(loss_meta_stat), batch_episode_counter])
+                 batch_episode_counter])
+            loss_cntr_stat = []
             batch_episode_counter += 1
             cntr_success = 0
             cntr_failure = 0
             goal_selected = 0
-
             print ("SAVING THE LOG FILES .....")
-            with open(logs_address + "cntr_success_stats_test.txt", "w") as file:
-                file.write("cntr_success,cntr_failure,goal_selected, success_ratio, cntr_loss, \
-                    meta_loss, batch_episode_counter \n")
+            with open(logs_address + "cntr_success_stats.txt", "w") as file:
+                file.write("cntr_success,cntr_failure,goal_selected, success_ratio, \
+                    batch_episode_counter \n")
                 for r in cntr_success_stats:
-                    file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>6.3f} {5:>6.3f} {6:>3} \n'.format(
-                        r[0],r[1],r[2],r[3],r[4],r[5],r[6]))
+                    file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>3} \n'.format(
+                        r[0],r[1],r[2],r[3],r[4]))
 
-            with open(logs_address + "cntr_result_history_test.txt", "w") as file:
+            with open(logs_address + "cntr_result_history.txt", "w") as file:
                 file.write("cntr_result, episode \n")
                 for result, ep in cntr_result_history:
                     file.write('{0:>5}  {1:>9} \n'.format(result, ep))
 
-
-            with open(logs_address + "cntr_logs_list_test.txt", "w") as file:
-                file.write("cntr_steps, meta_goal_reached, current_target_reached, episode_steps, episode \n")
+            with open(logs_address + "cntr_logs_list.txt", "w") as file:
+                file.write("meta_goal_reached, current_target_reached, cntr_steps, episode_steps, episode \n")
                 for line in cntr_logs_list:
-                        file.write('{0:>5} {1:>6} {2:>6} {3:>6} {4:>6} \n'.format(line[0],
+                        file.write('{0:>6} {1:>6} {2:>6} {3:>6} {4:>6} \n'.format(line[0],
                             line[1],line[2],line[3],line[4]))
-
 
 def test_both():
     pass

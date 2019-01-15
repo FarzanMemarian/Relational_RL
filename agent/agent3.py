@@ -33,7 +33,7 @@ default_cntr_memory_size = 10000
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # device = torch.device("cpu")
 
-class cntr_class(nn.Module):
+class cntr_net_conv_MLP(nn.Module):
 
     def __init__(self, last_conv_depth=32, ndim=5):
         super().__init__()
@@ -59,13 +59,11 @@ class cntr_class(nn.Module):
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
         x = x.view(-1, self.num_flat_features(x))
-        set_trace()
         x = self.append_goal(x,g)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
-
 
 
     def append_goal(self, x, g):
@@ -79,6 +77,48 @@ class cntr_class(nn.Module):
             num_features *= s
         return num_features    
 
+
+class cntr_net_MLP(nn.Module):
+
+    def __init__(self, last_conv_depth=32, ndim=5):
+        super().__init__()
+        # 1 input image channel, 6 output channels, 5x5 square convolution kernel
+        self.kernel_size = 2
+        self.stride = 1
+        self.ndim = ndim
+        self.last_conv_depth = last_conv_depth
+        self.conv1 = nn.Conv2d(1,  16, kernel_size=self.kernel_size, stride=self.stride)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, last_conv_depth, kernel_size=self.kernel_size, stride=self.stride)
+        self.bn2 = nn.BatchNorm2d(last_conv_depth)
+        # an affine operation: y = Wx + b
+        def conv2d_size_out(size, kernel_size, stride):
+            return (size - (kernel_size - 1) - 1) // stride  + 1
+        self.final_conv_dim = conv2d_size_out(conv2d_size_out(ndim,self.kernel_size, self.stride),self.kernel_size, self.stride)
+        self.fc1 = nn.Linear(1 * ndim * ndim + 1, 100)
+        self.fc2 = nn.Linear(100, 40)
+        self.fc3 = nn.Linear(40, 4)
+
+
+    def forward(self, x, g):
+        x = x.view(-1, self.num_flat_features(x))
+        x = self.append_goal(x,g)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+
+    def append_goal(self, x, g):
+        x = torch.cat([x, g], 1)
+        return x
+
+    def num_flat_features(self, x):
+        size = x.size()[1:]  # all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features 
 
 class ReplayMemory(object):
 
@@ -122,7 +162,8 @@ class hDQN:
                 cntr_optimizer,
                 cntr_lr,
                 meta_clamp,
-                cntr_clamp
+                cntr_clamp,
+                cntr_network
                 ):
 
         self.env = env
@@ -148,13 +189,20 @@ class hDQN:
         self.meta_optimizer, self.meta_criterion = self.set_optim(self.policy_meta_net.parameters(), 
             meta_optimizer, meta_loss, meta_lr)
         self.meta_clamp = meta_clamp
-        
-        self.policy_cntr_net = cntr_class(ndim=env.D_in).to(device)
-        self.target_cntr_net = cntr_class(ndim=env.D_in).to(device)
+
+        self.cntr_network_name = cntr_network
+        if self.cntr_network_name == "conv_MLP":
+            self.policy_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+            self.target_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+        if self.cntr_network_name == "MLP":
+            self.policy_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+            self.target_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+
         self.target_cntr_net.load_state_dict(self.policy_cntr_net.state_dict())
         self.target_cntr_net.eval()
+        self.cntr_optimizer_name, self.cntr_loss_name, self.cntr_lr_name = cntr_optimizer, cntr_loss, cntr_lr
         self.cntr_optimizer, self.cntr_criterion = self.set_optim(self.policy_cntr_net.parameters(), 
-            cntr_optimizer, cntr_loss, cntr_lr)
+            self.cntr_optimizer_name, self.cntr_loss_name, self.cntr_lr_name)
         self.cntr_clamp = cntr_clamp
 
     def set_optim(self, params, optimizer_str, loss_str, lr):
@@ -167,7 +215,7 @@ class hDQN:
             optimizer = optim.RMSprop(params, lr=lr, alpha=0.99, eps=1e-08, weight_decay=0, 
                 momentum=0, centered=False)
 
-        if loss_str == 'MSELoss':
+        if loss_str == 'MSEloss':
             criterion = nn.MSELoss()
         if loss_str == 'SmoothL1Loss':
             criterion = nn.SmoothL1Loss()
@@ -180,7 +228,7 @@ class hDQN:
             with torch.no_grad():
                 Q = []
                 for goal in self.env.current_objects:
-                    agent_env_state = utils.agent_env_state(agent_state, self.env.grid_mat)
+                    agent_env_state = utils.agent_env_state(agent_state, self.env.env_state)
                     pred = self.Q_meta(agent_env_state, goal, False)
                     Q.append(pred.item())
                 goal_idx = np.argmax(Q)
@@ -327,7 +375,7 @@ class hDQN:
         # ["agent_env_state_0", "goal", "reward", "next_agent_env_state", "next_available_goals", "done"]
 
         if len(self.meta_memory) < self.meta_batch_size:
-            return 
+            return 100000
 
 
         sample_size = min(self.meta_batch_size, len(self.meta_memory))
