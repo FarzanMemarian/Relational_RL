@@ -1,5 +1,8 @@
 # relational-RL
 
+To run the code go to /src directory and run python main3.py, you could alternatively run main2.py or main.py but each one corresponds to a different case. Cases are outlined below. 
+
+
 ## Case 1
 - the most basic case
 - objects are removed after they are reached
@@ -16,3 +19,4 @@
 
 ## Case 3
 - relational module is being implemented
+- train the controller first using the train_cntr function, then trian both together using train_meta_cntr function. 
