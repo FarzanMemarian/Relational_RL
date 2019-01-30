@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import copy
+import random
 
 import torch
 import torch.nn as nn
@@ -11,42 +12,59 @@ from pdb import set_trace
 
 
 """ NOTES
-- in steps, right now if the action is illegal, ncdothing happens and no reward is returned, this could be modified later
+- in steps, right now if the action is illegal, nothing happens and no reward is returned, this could be modified later
 
 """
 
 
 class Gridworld: # Environment
     def __init__(self, 
-        D_in, 
+        n_dim, 
         n_obj, 
         min_num, 
         max_num,
+        num_gridworlds,
         game_over_reward, 
         step_reward, 
         current_goal_reward, 
         final_goal_reward,
         int_goal_reward, 
         int_step_reward, 
-        int_wrong_goal_reward):
+        int_wrong_goal_reward,
+        reset_type):
 
         # creates a square gridworld
-        self.D_in = D_in
+        self.n_dim = n_dim
         self.n_obj = n_obj
         self.min_num = min_num
         self.max_num = max_num
+        self.num_gridworlds = num_gridworlds
 
         # objects, gridworld and goals
-        self.env_state = torch.zeros((self.D_in, self.D_in),dtype=torch.float32)
-        self.original_objects = self._create_objects()
-        self.current_objects = copy.deepcopy(self.original_objects)
-        self.object_idxs = self._place_objects()
-        self.env_state_original = copy.deepcopy(self.env_state)
         self.agent_loc = torch.zeros((1,2),dtype=torch.int)
-        self.agent_loc[0,:] = self._random_start()
+        self.env_state = None
+        self.is_env_state_created = False
+        self.original_objects = None
+        self.current_objects = None
+        self.original_object_idxs = None
+        self.current_object_idxs = None
+        self.env_state_original = None
+        self.env_state_finite_store = None
+
+        if reset_type == "reset_finite":
+            self.env_state_finite_store = self._create_multiple_env_states()
+            self.reset_finite()
+        elif reset_type == "reset":
+            self.reset()
+        elif reset_type == "reset_total":
+            self.reset_total()
+
+
         
         self.selected_goals = []
         self.current_target_goal = self.current_objects[0]
+        self.current_target_goal_idx = self.current_object_idxs[0]
+
 
         # actions
         self.allowable_actions = {}
@@ -65,46 +83,46 @@ class Gridworld: # Environment
 
     def _set_actions(self):
         # actions should be a dict of: (i, j): A (row, col): list of possible actions
-        for i in range(self.D_in):
-            for j in range(self.D_in):
-                if i != 0 and i != self.D_in-1 and j != 0 and j != self.D_in-1:
+        for i in range(self.n_dim):
+            for j in range(self.n_dim):
+                if i != 0 and i != self.n_dim-1 and j != 0 and j != self.n_dim-1:
                     self.allowable_actions[(i,j)] = self.all_actions
                     self.allowable_action_idxs[(i,j)] = [0,1,2,3]
                 else:
-                    if i == 0 and j != 0 and j != self.D_in-1:
+                    if i == 0 and j != 0 and j != self.n_dim-1:
                         self.allowable_actions[(i,j)] = ['D','R','L']
                         self.allowable_action_idxs[(i,j)] = [1,2,3]
-                    if i == self.D_in-1 and j != 0 and j != self.D_in-1:
+                    if i == self.n_dim-1 and j != 0 and j != self.n_dim-1:
                         self.allowable_actions[(i,j)] = ['U','R','L']
                         self.allowable_action_idxs[(i,j)] = [0,2,3]
-                    if j == 0 and i != 0 and i != self.D_in-1:
+                    if j == 0 and i != 0 and i != self.n_dim-1:
                         self.allowable_actions[(i,j)] = ['U','D','R']
                         self.allowable_action_idxs[(i,j)] = [0,1,2]
-                    if j == self.D_in-1 and i != 0 and i != self.D_in-1:
+                    if j == self.n_dim-1 and i != 0 and i != self.n_dim-1:
                         self.allowable_actions[(i,j)] = ['U','D','L']
                         self.allowable_action_idxs[(i,j)] = [0,1,3]
                     if i == 0 and j == 0:
                         self.allowable_actions[(i,j)] = ['D','R']
                         self.allowable_action_idxs[(i,j)] = [1,2]
-                    if i == self.D_in-1 and j == 0:
+                    if i == self.n_dim-1 and j == 0:
                         self.allowable_actions[(i,j)] = ['U','R']
                         self.allowable_action_idxs[(i,j)] = [0,2]
-                    if j == self.D_in-1 and i == 0:
+                    if j == self.n_dim-1 and i == 0:
                         self.allowable_actions[(i,j)] = ['D','L']
                         self.allowable_action_idxs[(i,j)] = [1,3]
-                    if j == self.D_in-1 and i == self.D_in-1:
+                    if j == self.n_dim-1 and i == self.n_dim-1:
                         self.allowable_actions[(i,j)] = ['U','L']
                         self.allowable_action_idxs[(i,j)] = [0,3]
 
     def update_target_goal(self):
         if self.current_objects:
             self.current_target_goal = self.current_objects[0]
+            self.current_target_goal_idx = self.current_object_idxs[0]
 
     def _create_objects(self):
         arr = np.arange(self.min_num, self.max_num+1)
         objects = np.random.choice(arr, size=self.n_obj, replace=False, p=None)
         objects = [int(element) for element in objects]   
-        objects = list(objects)
         objects.sort(reverse=False)
         return objects
 
@@ -112,9 +130,8 @@ class Gridworld: # Environment
         '''
         -places the objects
         -store the object's indexes
-        -places the agent
         '''
-        small_matrix_dim = (self.D_in+1)/2
+        small_matrix_dim = (self.n_dim+1)/2
         a = np.arange(0,small_matrix_dim**2, dtype=int)
         idx_1d = np.random.choice(a, size=self.n_obj, replace=False, p=None)
         idx_2d = [[2*math.floor(idx/small_matrix_dim), 2*int(idx%small_matrix_dim)] for idx in idx_1d]
@@ -124,30 +141,63 @@ class Gridworld: # Environment
             object_idxs.append((idx[0],idx[1]))
         return object_idxs
 
+
+    def _create_multiple_env_states(self):
+        state_list = []
+        for _ in range(self.num_gridworlds):
+            self.env_state = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
+            self.original_objects = self._create_objects()
+            self.original_object_idxs = self._place_objects()
+            state_list.append([copy.deepcopy(self.env_state), copy.deepcopy(self.original_objects), 
+                copy.deepcopy(self.original_object_idxs)])
+        return state_list
+
+
     def reset(self): 
         # the function creates the same gridworld as the original
-        self.env_state = copy.deepcopy(self.env_state_original)
-        # self.grid_flat = np.ravel(self.env_state).reshape((1,self.D_in*self.D_in)) # 1D array
+        if not self.is_env_state_created:
+            self.env_state = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
+            self.original_objects = self._create_objects()
+            self.original_object_idxs = self._place_objects()
+            self.is_env_state_created = True
+
+        self.env_state_original = copy.deepcopy(self.env_state)
         self.current_objects = copy.deepcopy(self.original_objects)
+        self.current_object_idxs = copy.deepcopy(self.original_object_idxs)
         self.selected_goals = []
         self.current_target_goal = self.current_objects[0]
+        self.current_target_goal_idx = self.current_object_idxs[0]
         self.agent_loc[0,:] = self._random_start()
         return copy.deepcopy(self.agent_loc), copy.deepcopy(self.env_state)
 
     def reset_total(self): # whole gridworld is created from the beginning and agent is 
                     # placed in a random position
-        self.env_state = torch.zeros((self.D_in, self.D_in),dtype=torch.float32)
+        self.env_state = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
         self.original_objects = self._create_objects()
-        self.object_idxs = self._place_objects()
-        self.agent_loc = torch.zeros((1,2),dtype=torch.int)
-        self.agent_loc[0,:] = self._random_start()
+        self.original_object_idxs = self._place_objects()
         self.env_state_original = copy.deepcopy(self.env_state)
         self.current_objects = copy.deepcopy(self.original_objects)
+        self.current_object_idxs = copy.deepcopy(self.original_object_idxs)
         self.selected_goals = []
         self.current_target_goal = self.current_objects[0]
-
+        self.current_target_goal_idx = self.current_object_idxs[0]
+        self.agent_loc[0,:] = self._random_start()
         return copy.deepcopy(self.agent_loc), copy.deepcopy(self.env_state)
 
+    def reset_finite(self): # whole gridworld is created from the beginning and agent is 
+                    # placed in a random position
+        sample = random.sample(self.env_state_finite_store,1)[0]
+        self.env_state = copy.deepcopy(sample[0])
+        self.original_objects = copy.deepcopy(sample[1])
+        self.original_object_idxs = copy.deepcopy(sample[2])
+        self.env_state_original = copy.deepcopy(self.env_state)
+        self.current_objects = copy.deepcopy(self.original_objects)
+        self.current_object_idxs = copy.deepcopy(self.original_object_idxs)
+        self.selected_goals = []
+        self.current_target_goal = self.current_objects[0]
+        self.current_target_goal_idx = self.current_object_idxs[0]
+        self.agent_loc[0,:] = self._random_start()
+        return copy.deepcopy(self.agent_loc), copy.deepcopy(self.env_state)
 
 
     def _random_start(self):
@@ -155,8 +205,8 @@ class Gridworld: # Environment
 
         done = False
         while not done:
-            i = np.random.choice(self.D_in)
-            j = np.random.choice(self.D_in)
+            i = np.random.choice(self.n_dim)
+            j = np.random.choice(self.n_dim)
             if self.env_state[i,j] == 0:
                 start[0,0] = i
                 start[0,1] = j
@@ -166,7 +216,10 @@ class Gridworld: # Environment
 
     def remove_object(self, i, j):
         self.env_state[i,j] = 0
-        return self.current_objects.pop(0)
+        self.current_object_idxs.pop(0)
+        removed_object = self.current_objects.pop(0)
+        return removed_object
+
 
 
     def set_state(self, s):
@@ -182,8 +235,7 @@ class Gridworld: # Environment
         i = self.agent_loc[0,0].item()
         j = self.agent_loc[0,1].item()
         action = self.all_actions[action_idx]
-    # check if legal move first, if not, nothing happens!
-
+        # check if legal move first, if not, nothing happens!
         if action in self.allowable_actions[(i,j)]:
             if   action == 'U':
                 self.agent_loc[0,0] += -1
@@ -193,14 +245,18 @@ class Gridworld: # Environment
                 self.agent_loc[0,0] += 1
             elif action == 'R':
                 self.agent_loc[0,1] += 1
+        return copy.deepcopy(self.agent_loc), copy.deepcopy(self.env_state)
 
+    def get_to_object(self, object):
+        i, j = [self.original_object_idxs[item] for  item,obj in enumerate(self.original_objects) if obj == object][0]
+        self.agent_loc[0,0] = i
+        self.agent_loc[0,1] = j
         return copy.deepcopy(self.agent_loc), copy.deepcopy(self.env_state)
 
     def int_reward(self, agent_state, meta_goal):
         i = agent_state[0,0]
         j = agent_state[0,1]
         element = self.env_state[i,j].item()
-
         if element == 0:
             reward = self.int_step_reward
         else:

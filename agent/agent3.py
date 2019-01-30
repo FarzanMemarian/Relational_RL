@@ -16,10 +16,11 @@ from envs.gridworld1 import Gridworld
 from src import transformer
 from utils import utils
 from pdb import set_trace
+import time
 
 # DEFAULT ARCHITECTURE FOR THE META cntr
 default_meta_batch_size = 1000
-default_meta_epsilon = 1.0
+default_meta_policy_temp = 1.0
 default_meta_memory_size = 10000
 
 # DEFAULT ARCHITECTURES FOR THE LOWER LEVEL cntr/cntr
@@ -30,8 +31,8 @@ default_tau = 0.001
 default_cntr_memory_size = 10000
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# device = torch.device("cpu")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 class cntr_net_conv_MLP(nn.Module):
 
@@ -106,6 +107,7 @@ class cntr_net_MLP(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
+
         return x
 
 
@@ -148,8 +150,8 @@ class hDQN:
                 batch_size,
                 meta_batch_size, 
                 gamma,
-                meta_epsilon, 
-                cntr_epsilon, 
+                meta_policy_temp, 
+                cntr_policy_temp, 
                 tau,
                 cntr_Transition,                
                 cntr_memory_size,
@@ -167,8 +169,8 @@ class hDQN:
                 ):
 
         self.env = env
-        self.meta_epsilon = meta_epsilon
-        self.cntr_epsilon = cntr_epsilon
+        self.meta_policy_temp = meta_policy_temp
+        self.cntr_policy_temp = cntr_policy_temp
         self.batch_size = batch_size
         self.meta_batch_size = meta_batch_size
         self.gamma = gamma
@@ -182,8 +184,8 @@ class hDQN:
         self.meta_memory = ReplayMemory(self.meta_memory_size, self.meta_Transition)
 
         
-        self.policy_meta_net = transformer.meta_class().to(device)
-        self.target_meta_net = transformer.meta_class().to(device)
+        self.policy_meta_net = transformer.meta_class(n_dim=env.n_dim).to(device)
+        self.target_meta_net = transformer.meta_class(n_dim=env.n_dim).to(device)
         self.target_meta_net.load_state_dict(self.policy_meta_net.state_dict())
         self.target_meta_net.eval()
         self.meta_optimizer, self.meta_criterion = self.set_optim(self.policy_meta_net.parameters(), 
@@ -192,11 +194,11 @@ class hDQN:
 
         self.cntr_network_name = cntr_network
         if self.cntr_network_name == "conv_MLP":
-            self.policy_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
-            self.target_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+            self.policy_cntr_net = cntr_net_conv_MLP(ndim=env.n_dim).to(device)
+            self.target_cntr_net = cntr_net_conv_MLP(ndim=env.n_dim).to(device)
         if self.cntr_network_name == "MLP":
-            self.policy_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
-            self.target_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+            self.policy_cntr_net = cntr_net_MLP(ndim=env.n_dim).to(device)
+            self.target_cntr_net = cntr_net_MLP(ndim=env.n_dim).to(device)
 
         self.target_cntr_net.load_state_dict(self.policy_cntr_net.state_dict())
         self.target_cntr_net.eval()
@@ -224,21 +226,41 @@ class hDQN:
 
 
     def select_goal(self, agent_state):
-        if self.meta_epsilon < random.random():
-            with torch.no_grad():
-                Q = []
-                for goal in self.env.current_objects:
-                    agent_env_state = utils.agent_env_state(agent_state, self.env.env_state)
-                    pred = self.Q_meta(agent_env_state, goal, False)
-                    Q.append(pred.item())
-                goal_idx = np.argmax(Q)
-                goal = self.env.current_objects[goal_idx]
-        else:
-            print("Exploring ...............")
-            goal = self.random_goal_selection()
+        # softmax approach
+        with torch.no_grad():
+            Q = np.zeros(len(self.env.current_objects))
+            for counter, goal in enumerate(self.env.current_objects):
+                agent_env_state = utils.agent_env_state(agent_state, self.env.env_state)
+                # goal_tensor = torch.unsqueeze(torch.unsqueeze(torch.tensor(goal),0),0)
+                pred = self.Q_meta(agent_env_state, goal, False)
+                Q[counter] = pred.item()
+
+            goal_idxs = np.arange(len(Q))
+            probabilities = np.exp(self.meta_policy_temp*Q) / sum(np.exp(self.meta_policy_temp * Q))
+            goal_idx = np.random.choice(goal_idxs, 1, p=probabilities)[0]
+            goal = self.env.current_objects[goal_idx]
+
         # update environment
         self.env.selected_goals.append(goal)
         return goal
+
+    # def select_goal(self, agent_state):
+    #     # epsilon greedy
+    #     if self.meta_policy_temp < random.random():
+    #         with torch.no_grad():
+    #             Q = []
+    #             for goal in self.env.current_objects:
+    #                 agent_env_state = utils.agent_env_state(agent_state, self.env.env_state)
+    #                 pred = self.Q_meta(agent_env_state, goal, False)
+    #                 Q.append(pred.item())
+    #             goal_idx = np.argmax(Q)
+    #             goal = self.env.current_objects[goal_idx]
+    #     else:
+    #         print("Exploring ...............")
+    #         goal = self.random_goal_selection()
+    #     # update environment
+    #     self.env.selected_goals.append(goal)
+    #     return goal
 
     def random_goal_selection(self):
         # Don't call this function directly, it would always be called from select_goal()
@@ -247,17 +269,33 @@ class hDQN:
         return goal
 
     def select_action(self, agent_state, env_state, goal):
+        # softmax policy
         i = agent_state[0,0].item()
         j = agent_state[0,1].item()
-        if random.random() > self.cntr_epsilon:
-            with torch.no_grad():
-                agent_env_state = utils.agent_env_state(agent_state, env_state)
-                action_probs = self.Q_cntr(agent_env_state, goal, target=False) 
-                action_idx = action_probs.max(1)[1]
-                action = self.env.all_actions[action_idx.item()]
-        else:
-            action_idx, action = self.random_action_selection()
+        with torch.no_grad():
+            agent_env_state = utils.agent_env_state(agent_state, env_state)
+            action_probs_tensor = self.Q_cntr(agent_env_state, goal, target=False)
+            action_probs = np.squeeze(action_probs_tensor.numpy())
+            action_idxs = np.arange(len(action_probs))
+            probabilities = np.exp(self.cntr_policy_temp*action_probs) / np.sum(np.exp(self.cntr_policy_temp*action_probs))
+            action_idx = torch.tensor(np.array(np.random.choice(action_idxs, 1, p=probabilities)[0]))
+            action = self.env.all_actions[action_idx.item()]
         return action_idx, action
+
+
+    # def select_action(self, agent_state, env_state, goal):
+    #     # epsilon greedy
+    #     i = agent_state[0,0].item()
+    #     j = agent_state[0,1].item()
+    #     if random.random() > self.cntr_policy_temp:
+    #         with torch.no_grad():
+    #             agent_env_state = utils.agent_env_state(agent_state, env_state)
+    #             action_probs = self.Q_cntr(agent_env_state, goal, target=False) 
+    #             action_idx = action_probs.max(1)[1]
+    #             action = self.env.all_actions[action_idx.item()]
+    #     else:
+    #         action_idx, action = self.random_action_selection()
+    #     return action_idx, action
 
     def random_action_selection(self):
         # print("random action selected")
@@ -315,8 +353,6 @@ class hDQN:
     def _update_cntr(self):
         if len(self.cntr_memory) < self.batch_size:
             return 100000
-
-        
         sample_size = min(self.batch_size, len(self.cntr_memory))
         exps = self.cntr_memory.sample(sample_size)
 
@@ -339,13 +375,11 @@ class hDQN:
         if not all_cntr_done:
             next_state_Vs[not_cntr_done_mask] = self.Q_cntr(next_state_non_cntr_dones, 
                     meta_goal_batch[not_cntr_done_mask], target=True).max(1)[0].detach()
-        
 
         # action_batch = torch.cat(batch.action)
         reward_batch = torch.tensor([exp.int_reward for exp in exps], dtype=torch.float32, device=device).detach()
         action_batch = torch.unsqueeze(torch.tensor([exp.action_idx for exp in exps], device=device), 1).detach()
         Q_policys = self.Q_cntr(state_batch, meta_goal_batch, target=False).gather(1, action_batch)
-
 
         try:
             Q_targets = reward_batch + (next_state_Vs * self.gamma)
@@ -353,7 +387,6 @@ class hDQN:
             print("Q targets problems...")
 
         Q_targets = torch.unsqueeze(Q_targets, 1)
-
         self.cntr_optimizer.zero_grad()
         loss = self.cntr_criterion(Q_policys, Q_targets)
         loss.backward()
@@ -361,7 +394,7 @@ class hDQN:
             for param in self.policy_cntr_net.parameters():
                 param.grad.data.clamp_(-1, 1)
         self.cntr_optimizer.step()
-
+        
         #Update target network
         with torch.no_grad():
             cntr_weights = self.policy_cntr_net.parameters()
@@ -369,6 +402,7 @@ class hDQN:
 
             for layer_w, target_layer_w in zip(cntr_weights, cntr_target_weights):
                 target_layer_w = self.target_tau * layer_w + (1 - self.target_tau) * target_layer_w
+
         return loss.item()
 
     def _update_meta(self):
@@ -389,7 +423,7 @@ class hDQN:
 
         # non_terminal_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.terminal for exp in exps])))
         # try:
-        #     next_state_non_terminals = torch.cat([torch.unsqueeze(utils.agent_env_state2(D_in, 
+        #     next_state_non_terminals = torch.cat([torch.unsqueeze(utils.agent_env_state2(n_dim, 
         #         exp.next_agent_env_state, exp.goal), 0) for exp in exps if exp.terminal != True])
         #     next_state_Vs = self.Q_meta(next_state_non_terminals, target=True)[0].detach()
         # except:

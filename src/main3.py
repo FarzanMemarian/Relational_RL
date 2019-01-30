@@ -21,22 +21,23 @@ from pdb import set_trace
 import pickle
 import time
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 def init(args):
 
-    NOTE = "cntr training, saved env, reset" 
+    NOTE = "bigger gridworld, reset_total, conv_MLP" 
 
     # *****************
     init_vars = {}
-    init_vars["fileName"] = "3_cntr_dev"
-    init_vars["to_read_from_folder"] = "3_cntr_dev" # folder name for trained cntr network
-    init_vars["main_function"]  = ["train_only_cntr","train_cntr_meta","test_cntr","test_both"][0]
+    init_vars["fileName"] = "3_meta_v0"
+    init_vars["pretrained_cntr_folder"] = "3_cntr_dev" # folder name for trained cntr network
+    init_vars["main_function"]  = ["train_cntr","train_dhrl","train_meta","test_cntr","test_both"][2]
     init_vars["num_epis"] = 300000
     #  WRITE PERIODS
-    init_vars["stat_period_dhrl"] = 100
+    init_vars["stat_period_dhrl"] = 20
     init_vars["stat_period_cntr"] = 100
-    init_vars["reset_type"] = ["reset","reset_total"][1] 
+    init_vars["reset_type"] = ["reset","reset_finite","reset_total"][0]
     init_vars["run_mode"] = ["restart","continue"][0]
     init_vars["no_anneal"] = False
     # *****************
@@ -51,21 +52,22 @@ def init(args):
     cntr_lr = 0.0001
 
     # Network type
-    cntr_network = ["conv_MLP","MLP"][0] 
+    cntr_network = ["conv_MLP","MLP"][1] 
 
     # GRID WORLD GEOMETRICAL PARAMETERS
-    D_in = 5 # pick odd numbers
-    n_obj = 3
+    n_dim = 7 # pick odd numbers
+    n_obj = 5
     min_num = 1
-    max_num = 3
+    max_num = 10
+    num_gridworlds = 5 # used only if reset_finite is picked
 
-    # extr REWARDS
-    game_over_reward = -10
+    # extr REWARDS (to be used by the meta controller)
+    game_over_reward = -1
     step_reward = 0
-    current_goal_reward = 10
-    final_goal_reward = 100
+    current_goal_reward = 1
+    final_goal_reward = 10 #currently not being used
 
-    # int REWARDS
+    # int REWARDS (to be used by the controller)
     int_goal_reward = 1
     int_step_reward = 0
     int_wrong_goal_reward = -1
@@ -76,19 +78,19 @@ def init(args):
 
     # PARAMETERS OF META 
     meta_batch_size = 128
-    init_vars["meta_eps_start"] = 0.9
-    init_vars["meta_eps_end"] = 0.05
-    init_vars["meta_eps_decay"] = 100000
-    meta_memory_size = 100000
+    init_vars["meta_eps_start_temp"] = 0.001
+    init_vars["meta_eps_end_temp"] = 5
+    init_vars["meta_eps_decay_temp"] = 100000
+    meta_memory_size = 10000
 
     # PARAMETERS OF CNTR
     batch_size = 128
     gamma = 0.9
-    init_vars["cntr_eps_start"] = 1
-    init_vars["cntr_eps_end"] = 0.05
-    init_vars["cntr_eps_decay"] = 100000
+    init_vars["cntr_eps_start_temp"] = 0.001
+    init_vars["cntr_eps_end_temp"] = 5
+    init_vars["cntr_eps_decay_temp"] = 100000
     tau = 0.001
-    cntr_memory_size = 100000
+    cntr_memory_size = 10000
     
     cntr_Transition = namedtuple("cntr_Transition", 
         ["agent_env_cntr", "action_idx", "int_reward", "next_agent_env_cntr", "meta_goal", 
@@ -98,25 +100,27 @@ def init(args):
         "next_available_goals", "terminal", "meta_exp_counter"])
 
     # create and initialize the environment   
-    env = Gridworld(D_in = D_in, 
+    env = Gridworld(n_dim = n_dim, 
                     n_obj=n_obj, 
                     min_num = min_num, 
                     max_num = max_num,
+                    num_gridworlds = num_gridworlds,
                     game_over_reward = game_over_reward, 
                     step_reward = step_reward, 
                     current_goal_reward=current_goal_reward, 
                     final_goal_reward = final_goal_reward,
                     int_goal_reward=int_goal_reward, 
                     int_step_reward=int_step_reward, 
-                    int_wrong_goal_reward=int_wrong_goal_reward)
+                    int_wrong_goal_reward=int_wrong_goal_reward,
+                    reset_type=init_vars["reset_type"])
 
     # create and initialize the agent
     agent = hDQN(env=env, 
                 batch_size=batch_size,
                 meta_batch_size=meta_batch_size, 
                 gamma=gamma,
-                meta_epsilon=init_vars["meta_eps_start"], 
-                cntr_epsilon=init_vars["cntr_eps_start"], 
+                meta_policy_temp=init_vars["meta_eps_start_temp"], 
+                cntr_policy_temp=init_vars["cntr_eps_start_temp"], 
                 tau = tau,
                 cntr_Transition = cntr_Transition,
                 cntr_memory_size = cntr_memory_size,
@@ -144,28 +148,30 @@ def init(args):
             "no_anneal" : init_vars["no_anneal"], 
             "cntr_clamp" : cntr_clamp,
             "cntr_network" : cntr_network,
-            "D_in" : D_in, 
+            "n_dim" : n_dim, 
             "n_obj":n_obj, 
             "min_num" : min_num,
             "max_num" : max_num,
+            "num_gridworlds" : num_gridworlds,
             "int_goal_reward":int_goal_reward, 
             "int_step_reward":int_step_reward, 
             "int_wrong_goal_reward":int_wrong_goal_reward,
             "batch_size":batch_size,
             "gamma":gamma,
-            "cntr_eps_start" : init_vars["cntr_eps_start"],
-            "cntr_eps_end" : init_vars["cntr_eps_end"],
-            "cntr_eps_decay" : init_vars["cntr_eps_decay"],
+            "cntr_eps_start_temp" : init_vars["cntr_eps_start_temp"],
+            "cntr_eps_end_temp" : init_vars["cntr_eps_end_temp"],
+            "cntr_eps_decay_temp" : init_vars["cntr_eps_decay_temp"],
             "tau" : tau,
             "cntr_loss" : cntr_loss,
             "cntr_optimizer" : cntr_optimizer,
-            "cntr_lr" : cntr_lr
+            "cntr_lr" : cntr_lr,
+            "device" : device
             }
 
     params_dhrl_run = {
             'NOTE' : NOTE,
             "fileName" : init_vars["fileName"],
-            "to_read_from_folder" : init_vars["to_read_from_folder"],
+            "pretrained_cntr_folder" : init_vars["pretrained_cntr_folder"],
             "main_function" : init_vars["main_function"],
             "num_epis" : init_vars["num_epis"],
             "stat_period_dhrl" : init_vars["stat_period_dhrl"],
@@ -175,10 +181,11 @@ def init(args):
             "meta_clamp" : meta_clamp,
             "cntr_clamp" : cntr_clamp,
             "cntr_network" : cntr_network,
-            "D_in" : D_in, 
+            "n_dim" : n_dim, 
             "n_obj":n_obj, 
             "min_num" : min_num,
             "max_num" : max_num,
+            "num_gridworlds" : num_gridworlds,
             "game_over_reward" : game_over_reward, 
             "step_reward" : step_reward, 
             "current_goal_reward":current_goal_reward, 
@@ -189,12 +196,12 @@ def init(args):
             "batch_size":batch_size,
             "meta_batch_size":meta_batch_size, 
             "gamma":gamma,
-            "meta_eps_start" : init_vars["meta_eps_start"],
-            "meta_eps_end" : init_vars["meta_eps_end"],
-            "meta_eps_decay" : init_vars["meta_eps_decay"],
-            "cntr_eps_start" : init_vars["cntr_eps_start"],
-            "cntr_eps_end" : init_vars["cntr_eps_end"],
-            "cntr_eps_decay" : init_vars["cntr_eps_decay"],
+            "meta_eps_start_temp" : init_vars["meta_eps_start_temp"],
+            "meta_eps_end_temp" : init_vars["meta_eps_end_temp"],
+            "meta_eps_decay_temp" : init_vars["meta_eps_decay_temp"],
+            "cntr_eps_start_temp" : init_vars["cntr_eps_start_temp"],
+            "cntr_eps_end_temp" : init_vars["cntr_eps_end_temp"],
+            "cntr_eps_decay_temp" : init_vars["cntr_eps_decay_temp"],
             "tau" : tau,
             "cntr_memory_size" : cntr_memory_size,
             "meta_memory_size" : meta_memory_size,
@@ -203,30 +210,59 @@ def init(args):
             "meta_lr" : meta_lr,
             "cntr_loss" : cntr_loss,
             "cntr_optimizer" : cntr_optimizer,
-            "cntr_lr" : cntr_lr
+            "cntr_lr" : cntr_lr,
+            "device" : device
+            }
+
+    params_meta_run = {
+            'NOTE' : NOTE,
+            "fileName" : init_vars["fileName"],
+            "main_function" : init_vars["main_function"],
+            "num_epis" : init_vars["num_epis"],
+            "stat_period_dhrl" : init_vars["stat_period_dhrl"],
+            "reset_type" : init_vars["reset_type"], 
+            "no_anneal" : init_vars["no_anneal"], 
+            "meta_clamp" : meta_clamp,
+            "n_dim" : n_dim, 
+            "n_obj":n_obj, 
+            "min_num" : min_num,
+            "max_num" : max_num,
+            "num_gridworlds" : num_gridworlds,
+            "game_over_reward" : game_over_reward, 
+            "step_reward" : step_reward, 
+            "current_goal_reward":current_goal_reward, 
+            "final_goal_reward" : final_goal_reward,
+            "int_goal_reward":int_goal_reward, 
+            "int_step_reward":int_step_reward, 
+            "int_wrong_goal_reward":int_wrong_goal_reward,
+            "batch_size":batch_size,
+            "meta_batch_size":meta_batch_size, 
+            "gamma":gamma,
+            "meta_eps_start_temp" : init_vars["meta_eps_start_temp"],
+            "meta_eps_end_temp" : init_vars["meta_eps_end_temp"],
+            "meta_eps_decay_temp" : init_vars["meta_eps_decay_temp"],
+            "meta_memory_size" : meta_memory_size,
+            "meta_loss" : meta_loss,
+            "meta_optimizer" : meta_optimizer,
+            "meta_lr" : meta_lr,
             }
 
     logs_address, models_address, _ = addresses(init_vars)
-    if init_vars["main_function"]  == "train_only_cntr":
-        create_directories(init_vars)
-        with open(logs_address+'params_cntr_run.txt','w') as f:
-            for key, value in params_cntr_run.items():
-                f.write('{0}: {1}\n'.format(key, value))
-        with open(models_address+'params_cntr_run.txt','w') as f:
-            for key, value in params_cntr_run.items():
-                f.write('{0}: {1}\n'.format(key, value))
+    param_file = "params_" + init_vars["main_function"]
+    if init_vars["main_function"] == "train_cntr":
+        param_var = params_cntr_run
+    elif init_vars["main_function"] == "train_meta":
+        param_var = params_meta_run
+    else:
+        param_var = params_dhrl_run
 
-    if init_vars["main_function"]  == "train_cntr_meta":
-        create_directories(init_vars)
-        with open(logs_address+'params_dhqn_run.txt','w') as f:
-            for key, value in params_dhrl_run.items():
-                f.write('{0}: {1}\n'.format(key, value))
-        with open(models_address+'params_dhqn_run.txt','w') as f:
-            for key, value in params_dhrl_run.items():
-                f.write('{0}: {1}\n'.format(key, value))
-
-    if init_vars["main_function"]  == "test_cntr":
-        create_directories(init_vars)
+    create_directories(init_vars)
+    with open(logs_address+param_file,'w') as f:
+        for key, value in param_var.items():
+            f.write('{0}: {1}\n'.format(key, value))
+    with open(models_address+param_file,'w') as f:
+        for key, value in param_var.items():
+            f.write('{0}: {1}\n'.format(key, value))    
 
     return env, agent, init_vars
 
@@ -246,9 +282,8 @@ def create_directories(init_vars):
 def addresses(init_vars):
     logs_address = "../logs/" + init_vars["fileName"] + "/"
     models_address = "../saved_models/" + init_vars["fileName"] + "/"
-    read_cntr_address = "../saved_models/" + init_vars["to_read_from_folder"] + "/"
+    read_cntr_address = "../saved_models/" + init_vars["pretrained_cntr_folder"] + "/"
     return logs_address, models_address, read_cntr_address
-
 
 def train_DHRL(env, agent, init_vars):
     # this should only be run after train_cntr has been run
@@ -256,20 +291,20 @@ def train_DHRL(env, agent, init_vars):
     # creating the folder names
     logs_address, models_address, read_cntr_address = addresses(init_vars)
     num_epis = init_vars["num_epis"]
-    meta_eps_start = init_vars["meta_eps_start"]
-    meta_eps_end = init_vars["meta_eps_end"]
-    meta_eps_decay = init_vars["meta_eps_decay"]
-    cntr_eps_start = init_vars["cntr_eps_start"]
-    cntr_eps_end = init_vars["cntr_eps_end"]
-    cntr_eps_decay = init_vars["cntr_eps_decay"]
+    meta_eps_start_temp = init_vars["meta_eps_start_temp"]
+    meta_eps_end_temp = init_vars["meta_eps_end_temp"]
+    meta_eps_decay_temp = init_vars["meta_eps_decay_temp"]
+    cntr_eps_start_temp = init_vars["cntr_eps_start_temp"]
+    cntr_eps_end_temp = init_vars["cntr_eps_end_temp"]
+    cntr_eps_decay_temp = init_vars["cntr_eps_decay_temp"]
 
     # Load models
     if agent.cntr_network_name == "conv_MLP":
-        agent.policy_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
-        agent.target_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+        agent.policy_cntr_net = cntr_net_conv_MLP(ndim=env.n_dim).to(device)
+        agent.target_cntr_net = cntr_net_conv_MLP(ndim=env.n_dim).to(device)
     if agent.cntr_network_name == "MLP":
-        agent.policy_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
-        agent.target_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+        agent.policy_cntr_net = cntr_net_MLP(ndim=env.n_dim).to(device)
+        agent.target_cntr_net = cntr_net_MLP(ndim=env.n_dim).to(device)
     
     agent.policy_cntr_net.load_state_dict(torch.load(read_cntr_address + "policy_cntr_net_train_cntr.pt"))
     agent.cntr_optimizer, agent.cntr_criterion = agent.set_optim(agent.policy_cntr_net.parameters(), 
@@ -281,8 +316,11 @@ def train_DHRL(env, agent, init_vars):
         env_state = torch.load(read_cntr_address + "env_state.pt")
         env.env_state = copy.deepcopy(env_state)
         env.env_state_original = copy.deepcopy(env_state)
+    elif init_vars["reset_type"] == 'reset_finite':
+        pass
+        # complete this part
 
-    visits = np.zeros((env.D_in, env.D_in))
+    visits = np.zeros((env.n_dim, env.n_dim))
     game_won_counter = 0
     game_over_counter = 0
     game_result_history = []
@@ -306,6 +344,9 @@ def train_DHRL(env, agent, init_vars):
             agent_state, env_state = env.reset() 
         if init_vars["reset_type"] == 'reset_total':
             agent_state, env_state = env.reset_total() 
+        if init_vars["reset_type"] == 'reset_finite':
+            agent_state, env_state = env.reset_finite() 
+
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
         loss_cntr_epis = 0
@@ -436,27 +477,27 @@ def train_DHRL(env, agent, init_vars):
 
         # End of one episode
         hdqn_logs_list.append([episode_steps, game_won, episode])
-        print("meta_epsilon: " + str(agent.meta_epsilon))
-        print("cntr_epsilon: " + str(agent.cntr_epsilon))
+        print("meta_policy_temp: " + str(agent.meta_policy_temp))
+        print("cntr_policy_temp: " + str(agent.cntr_policy_temp))
         loss_cntr_stat.append(loss_cntr_epis/episode_steps)
         loss_meta_stat.append(loss_meta_epis/episode_steps)
         if not init_vars["no_anneal"]:
             # Annealing 
-            agent.meta_epsilon = meta_eps_end + (meta_eps_start - meta_eps_end) * \
-                    math.exp(-1. * episode / meta_eps_decay)
-            agent.cntr_epsilon = cntr_eps_end + (cntr_eps_start - cntr_eps_end) * \
-                    math.exp(-1. * episode / cntr_eps_decay) 
+            agent.meta_policy_temp = meta_eps_end_temp + (meta_eps_start_temp - meta_eps_end_temp) * \
+                    math.exp(-1. * episode / meta_eps_decay_temp)
+            agent.cntr_policy_temp = cntr_eps_end_temp + (cntr_eps_start_temp - cntr_eps_end_temp) * \
+                    math.exp(-1. * episode / cntr_eps_decay_temp) 
             # avg_success_rate = cntr_success / goal_selected
 
             # if(avg_success_rate == 0 or avg_success_rate == 1):
-            #     agent.cntr_epsilon -= anneal_factor
+            #     agent.cntr_policy_temp -= anneal_factor
             # elif episode > 200:
-            #     agent.cntr_epsilon = 1 - avg_success_rate
+            #     agent.cntr_policy_temp = 1 - avg_success_rate
   
-            if(agent.cntr_epsilon < 0.05):
-                agent.cntr_epsilon = 0.05
-            # if(agent.meta_epsilon) < 0.05:
-            #     agent.meta_epsilon = 0.05
+            # if(agent.cntr_policy_temp < 0.05):
+            #     agent.cntr_policy_temp = 0.05
+            # if(agent.meta_policy_temp) < 0.05:
+            #     agent.meta_policy_temp = 0.05
 
         if episode != 0 and episode % (init_vars["stat_period_dhrl"]-1) == 0:
             
@@ -485,7 +526,7 @@ def train_DHRL(env, agent, init_vars):
             with open(logs_address + "meta_success_stats.txt", "w") as file:
                 file.write("meta_success, meta_failure, goal_selected, success_ratio, meta_loss, \
                     batch_episode_counter \n")
-                for r in cntr_success_stats:
+                for r in meta_success_stats:
                     file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>14.10f} {5:>3} \n'.format(
                         r[0],r[1],r[2],r[3],r[4],r[5]))
 
@@ -520,23 +561,237 @@ def train_DHRL(env, agent, init_vars):
             torch.save(agent.target_cntr_net.state_dict(), models_address + "target_cntr_net.pt")
 
 
+def train_meta(env, agent, init_vars):
+    # this function assumes that any object picked by the meta controller is always pickec 
+    # bypassing the controller
+
+    # creating the folder names
+    logs_address, models_address, _ = addresses(init_vars)
+    num_epis = init_vars["num_epis"]
+    meta_eps_start_temp = init_vars["meta_eps_start_temp"]
+    meta_eps_end_temp = init_vars["meta_eps_end_temp"]
+    meta_eps_decay_temp = init_vars["meta_eps_decay_temp"]
+
+
+    visits = np.zeros((env.n_dim, env.n_dim))
+    game_won_counter = 0
+    game_over_counter = 0
+    game_result_history = []
+    cntr_result_history = []
+    meta_exp_counter = 0
+    goal_selected = 0
+    cntr_success = 0
+    cntr_failure = 0
+    meta_success = 0
+    meta_failure = 0
+    cntr_success_stats = []
+    meta_success_stats = []
+    cntr_logs_list = [] # each element should be [cntr_steps, meta_goal_reached, non_meta_goal_reached, episode_steps]
+    hdqn_logs_list = [] # each slement should be [episode_steps, game_won]
+    loss_cntr_stat = []
+    loss_meta_stat = []
+    batch_episode_counter = 0
+    start_stat_period_time = time.time()
+    update_stat_period_time_accum = 0
+    for episode in range(num_epis):
+        print("\n\n\n\n### EPISODE "  + str(episode) + "###")
+        if init_vars["reset_type"] == 'reset': 
+            agent_state, env_state = env.reset() 
+        if init_vars["reset_type"] == 'reset_total':
+            agent_state, env_state = env.reset_total() 
+        if init_vars["reset_type"] == 'reset_finite':
+            agent_state, env_state = env.reset_finite() 
+
+        terminal = False
+        loss_meta_epis = 0
+        episode_steps = 0
+        while not terminal:  # this loop is for meta-cntr
+                             # which means while the game is not lost or won
+            meta_goal = agent.select_goal(agent_state)  # meta cntr selects a goal
+            if meta_goal == env.current_target_goal:
+                meta_success += 1
+
+            else:
+                meta_failure += 1 
+
+            goal_selected += 1
+            print("\nNew Goal: "  + str(meta_goal) + "\n")
+            total_extr_reward = 0
+
+            agent_env_state_0 = utils.agent_env_state(agent_state, env_state) # for meta controller start state
+            meta_goal_reached = False
+            while not terminal and not meta_goal_reached: # this loop is for meta, while state not terminal
+                episode_steps += 1
+                next_agent_state, next_env_state = env.get_to_object(meta_goal) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
+                extr_reward = torch.tensor([env.extr_reward(next_agent_state)], device=device)
+                i, j = next_agent_state[0,0].item(), next_agent_state[0,1].item()
+                current_element = int(env.env_state[i,j].item())
+                meta_goal_reached = current_element == meta_goal
+                current_target_reached = current_element == env.current_target_goal
+                
+                if current_element != 0 and not meta_goal_reached:
+                    non_meta_goal_reached = True
+                else:
+                    non_meta_goal_reached = False
+                # print ("state before action ----> " + "[" + str(agent_state[0,0].item()) +", " + 
+                #         str(agent_state[0,1].item()) + "]" )
+                # print ("action ----> "  + action)
+                # print ("state after action ----> " + "[" + str(i) +", " + str(j) + "]" )
+                # print ("---------------------")
+                game_over, game_won = env.is_terminal(next_agent_state)
+                terminal = game_over or game_won # terminal refers to next state
+                cntr_done = non_meta_goal_reached or meta_goal_reached
+
+                if current_target_reached:
+                    # print("CURRENT TARGET REACHED! ")
+                    # print("the object reached : " + str(current_element))
+                    # print("the current target : " + str(env.current_target_goal))
+                    # print ("original objects: {}".format(env.original_objects))
+                    removed_object = env.remove_object(i,j)
+                    env.update_target_goal()
+                    # object will only be removed if it's the right object to be picked up
+                    # else the game ends and it doesn't matter what the remaining objects are
+                    # print ("object {} removed <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(removed_object))     
+                    # print ("current objects: {}".format(env.current_objects))
+                    # print ("********************") 
+
+ 
+
+                
+                if game_over:
+                    game_over_counter += 1
+                    game_result_history.append([0, episode])
+                    # print("GAME OVER!!!") 
+                    # print("selected goal:" + str(meta_goal))
+                    # print("the object reached: " +  str(current_element))
+                    # print("the current target goal: " + str(env.current_target_goal))
+                    # print ("original objects: {}".format(env.original_objects))
+                    # print ("current objects: {}".format(env.current_objects))                        
+                    # print("********************")
+                
+                if game_won:
+                    game_won_counter += 1
+                    game_result_history.append([1, episode])
+                    # print("GAME WON!!!") 
+                    # print("the object reached: " +  str(current_element))
+                    # print("the current target goal: " + str(env.current_target_goal))
+                    # print ("original objects: {}".format(env.original_objects)) 
+                    # print ("current objects: {}".format(env.current_objects))                       
+                    # print("********************")
+
+
+                # if env.env_state[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
+                #     print("final object/number picked!! ")
+                agent_env_state = utils.agent_env_state(agent_state, env_state)
+                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state)
+                next_available_actions = env.allowable_actions[i,j]
+
+                # if the state is terminal, the experiment will not even be added to the cntr_Transition
+                # or the MetaEcperience, only the next_state can be terminal
+
+                start_update_time = time.time()
+                loss_meta = agent.update(meta=True)
+                update_time = time.time() - start_update_time
+                update_stat_period_time_accum += update_time
+
+                loss_meta_epis += loss_meta
+                total_extr_reward += extr_reward
+                agent_state = copy.deepcopy(next_agent_state)
+                env_state = copy.deepcopy(next_env_state)
+
+            next_agent_env_state = utils.agent_env_state(agent_state, env_state)
+            next_available_goals = env.current_objects
+            meta_exp_counter += 1 
+            exp_meta = copy.deepcopy([agent_env_state_0, torch.tensor([meta_goal], dtype=torch.float, device=device), total_extr_reward, 
+                next_agent_env_state, next_available_goals, terminal, meta_exp_counter])
+            agent.store(*exp_meta, meta=True)
+
+        # End of one episode
+        hdqn_logs_list.append([episode_steps, game_won, episode])
+        print("meta_policy_temp: " + str(agent.meta_policy_temp))
+        print("cntr_policy_temp: " + str(agent.cntr_policy_temp))
+        loss_meta_stat.append(loss_meta_epis/episode_steps)
+        if not init_vars["no_anneal"]:
+            # Annealing 
+            agent.meta_policy_temp = meta_eps_end_temp + (meta_eps_start_temp - meta_eps_end_temp) * \
+                    math.exp(-1. * episode / meta_eps_decay_temp)
+
+            # avg_success_rate = cntr_success / goal_selected
+
+            # if(avg_success_rate == 0 or avg_success_rate == 1):
+            #     agent.cntr_policy_temp -= anneal_factor
+            # elif episode > 200:
+            #     agent.cntr_policy_temp = 1 - avg_success_rate
+  
+            # if(agent.cntr_policy_temp < 0.05):
+            #     agent.cntr_policy_temp = 0.05
+            # if(agent.meta_policy_temp) < 0.05:
+            #     agent.meta_policy_temp = 0.05
+
+        if episode != 0 and episode % (init_vars["stat_period_dhrl"]-1) == 0:
+            
+            elapsed_stat_period_time = time.time() - start_stat_period_time
+            meta_success_ratio = meta_success/(meta_success+meta_failure)
+            meta_success_stats.append([meta_success, meta_failure, goal_selected, meta_success_ratio,
+                np.mean(loss_meta_stat), batch_episode_counter, update_stat_period_time_accum,
+                elapsed_stat_period_time])
+            loss_meta_stat = []
+            meta_success = 0
+            meta_failure = 0
+            goal_selected = 0
+            batch_episode_counter += 1
+            print ("SAVING THE LOG FILES .....")
+            with open(logs_address + "meta_success_stats.txt", "w") as file:
+                file.write("meta_success, meta_failure, goal_selected, success_ratio, meta_loss, \
+                    batch_episode_counter,update_stat_period_time_accum, elapsed_stat_period_time \n")
+                for r in meta_success_stats:
+                    file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>14.10f} {5:>3} {6:>6.2f} {7:>6.2f} \n'.format(
+                        r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7]))
+
+            with open(logs_address + "game_stats.txt", "w") as file:
+                file.write("game_won_counter: {}\n".format(game_won_counter)) 
+                file.write("game_over_counter: {}\n".format(game_over_counter))
+                file.write("game won ratio: {}\n".format(game_won_counter/(game_over_counter+game_won_counter)))
+
+            with open(logs_address + "game_result_history.txt", "w") as file:
+                file.write("game_result, episode \n")
+                for result, ep in game_result_history:
+                    file.write('{0:>5}  {1:>9} \n'.format(result, ep))
+
+            with open(logs_address + "hdqn_logs_list.txt", "w") as file:
+                file.write("episode_steps, game_won, episode \n")
+                for line in hdqn_logs_list:
+                    file.write('{0:>5} {1:>6} {2:>6} \n'.format(line[0],line[1],line[2]))
+
+            print ("SAVING THE MODELS .............")  
+            print ()
+            torch.save(agent.policy_meta_net.state_dict(), models_address + "policy_meta_net.pt")
+            torch.save(agent.target_meta_net.state_dict(), models_address + "target_meta_net.pt")
+            torch.save(agent.policy_cntr_net.state_dict(), models_address + "policy_cntr_net.pt")
+            torch.save(agent.target_cntr_net.state_dict(), models_address + "target_cntr_net.pt")
+
+            start_stat_period_time = time.time()
+            update_stat_period_time_accum = 0
+
 def train_cntr(env, agent, init_vars):
 
     # creating the folders
     logs_address, models_address, _ = addresses(init_vars)
     num_epis = init_vars["num_epis"]
-    meta_eps_start = init_vars["meta_eps_start"]
-    meta_eps_end = init_vars["meta_eps_end"]
-    meta_eps_decay = init_vars["meta_eps_decay"]
-    cntr_eps_start = init_vars["cntr_eps_start"]
-    cntr_eps_end = init_vars["cntr_eps_end"]
-    cntr_eps_decay = init_vars["cntr_eps_decay"]
+    meta_eps_start_temp = init_vars["meta_eps_start_temp"]
+    meta_eps_end_temp = init_vars["meta_eps_end_temp"]
+    meta_eps_decay_temp = init_vars["meta_eps_decay_temp"]
+    cntr_eps_start_temp = init_vars["cntr_eps_start_temp"]
+    cntr_eps_end_temp = init_vars["cntr_eps_end_temp"]
+    cntr_eps_decay_temp = init_vars["cntr_eps_decay_temp"]
 
     # save the gridworld to be used for eval later
     if init_vars["reset_type"] == "reset":
         torch.save(env.env_state_original, models_address + "env_state.pt")
+    elif init_vars["reset_type"] == "reset_finite":
+        torch.save(env.env_state_finite_store, models_address + "env_state_finite_store.pt")
 
-    visits = np.zeros((env.D_in, env.D_in))
+    visits = np.zeros((env.n_dim, env.n_dim))
     game_won_counter = 0
     game_over_counter = 0
     cntr_result_history = []
@@ -555,9 +810,12 @@ def train_cntr(env, agent, init_vars):
 
         if init_vars["reset_type"] == 'reset': 
             agent_state, env_state = env.reset() 
-        if init_vars["reset_type"] == 'reset_total':
+        elif init_vars["reset_type"] == 'reset_total':
             agent_state, env_state = env.reset_total() 
+        elif init_vars["reset_type"] == 'reset_finite':
+            agent_state, env_state = env.reset_finite() 
 
+        set_trace()
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
         non_meta_goal_reached = False
@@ -660,8 +918,9 @@ def train_cntr(env, agent, init_vars):
                 agent.store(*exp_cntr, meta=False)
                 start_update_time = time.time()
                 loss_cntr = agent.update(meta=False)
-                end_update_time = time.time()
-                update_stat_period_time_accum += end_update_time - start_update_time
+                update_time = time.time() - start_update_time
+                update_stat_period_time_accum += update_time
+
                 loss_cntr_epis += loss_cntr
 
                 agent_state = copy.deepcopy(next_agent_state)
@@ -674,23 +933,23 @@ def train_cntr(env, agent, init_vars):
 
 
         #  THIS IS THE END OF ONE EPISODE
-        print("cntr_epsilon: " + str(agent.cntr_epsilon))
+        print("cntr_policy_temp: " + str(agent.cntr_policy_temp))
         loss_cntr_stat.append(loss_cntr_epis/episode_steps)
         if not init_vars["no_anneal"]:
             # Annealing 
-            agent.cntr_epsilon = cntr_eps_end + (cntr_eps_start - cntr_eps_end) * \
-                    math.exp(-1. * episode / cntr_eps_decay)
+            agent.cntr_policy_temp = cntr_eps_end_temp + (cntr_eps_start_temp - cntr_eps_end_temp) * \
+                    math.exp(-1. * episode / cntr_eps_decay_temp)
             # if episode < num_epis / 10:
-            #     agent.cntr_epsilon -= anneal_factor * init_vars["stat_period_cntr"]
+            #     agent.cntr_policy_temp -= anneal_factor * init_vars["stat_period_cntr"]
             # else:
             #     success_ratio = cntr_success / (cntr_success + cntr_failure)
             #     if success_ratio == 1 or success_ratio == 0:
-            #         agent.cntr_epsilon -= anneal_factor
+            #         agent.cntr_policy_temp -= anneal_factor
             #     else:
-            #         agent.cntr_epsilon = 1 - success_ratio
+            #         agent.cntr_policy_temp = 1 - success_ratio
                 
-            if agent.cntr_epsilon < 0.05:
-                agent.cntr_epsilon = 0.05
+            # if agent.cntr_policy_temp < 0.05:
+            #     agent.cntr_policy_temp = 0.05
 
 
         
@@ -715,7 +974,6 @@ def train_cntr(env, agent, init_vars):
                     file.write('{0:>7} {1:>7} {2:>7} {3:>6.3f} {4:>14.10f} {5:>3} {6:>6.2f} {7:>6.2f}\n'.format(
                         r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7]))
 
-  
 
             with open(logs_address + "cntr_result_history.txt", "w") as file:
                 file.write("cntr_result, episode \n")
@@ -743,20 +1001,20 @@ def test_cntr(env, agent, init_vars):
 
     logs_address, models_address, read_cntr_address = addresses(init_vars)
     num_epis = init_vars["num_epis"]
-    meta_eps_start = init_vars["meta_eps_start"]
-    meta_eps_end = init_vars["meta_eps_end"]
-    meta_eps_decay = init_vars["meta_eps_decay"]
-    cntr_eps_start = init_vars["cntr_eps_start"]
-    cntr_eps_end = init_vars["cntr_eps_end"]
-    cntr_eps_decay = init_vars["cntr_eps_decay"]
+    meta_eps_start_temp = init_vars["meta_eps_start_temp"]
+    meta_eps_end_temp = init_vars["meta_eps_end_temp"]
+    meta_eps_decay_temp = init_vars["meta_eps_decay_temp"]
+    cntr_eps_start_temp = init_vars["cntr_eps_start_temp"]
+    cntr_eps_end_temp = init_vars["cntr_eps_end_temp"]
+    cntr_eps_decay_temp = init_vars["cntr_eps_decay_temp"]
 
     # Load models
     if agent.cntr_network_name == "conv_MLP":
-        agent.policy_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
-        agent.target_cntr_net = cntr_net_conv_MLP(ndim=env.D_in).to(device)
+        agent.policy_cntr_net = cntr_net_conv_MLP(ndim=env.n_dim).to(device)
+        agent.target_cntr_net = cntr_net_conv_MLP(ndim=env.n_dim).to(device)
     if agent.cntr_network_name == "MLP":
-        agent.policy_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
-        agent.target_cntr_net = cntr_net_MLP(ndim=env.D_in).to(device)
+        agent.policy_cntr_net = cntr_net_MLP(ndim=env.n_dim).to(device)
+        agent.target_cntr_net = cntr_net_MLP(ndim=env.n_dim).to(device)
     
     agent.policy_cntr_net.load_state_dict(torch.load(read_cntr_address + "policy_cntr_net_train_cntr.pt"))
     agent.cntr_optimizer, agent.cntr_criterion = agent.set_optim(agent.policy_cntr_net.parameters(), 
@@ -769,7 +1027,7 @@ def test_cntr(env, agent, init_vars):
         env.env_state = copy.deepcopy(env_state)
         env.env_state_original = copy.deepcopy(env_state)
 
-    visits = np.zeros((env.D_in, env.D_in))
+    visits = np.zeros((env.n_dim, env.n_dim))
     game_won_counter = 0
     game_over_counter = 0
     cntr_result_history = []
@@ -782,7 +1040,7 @@ def test_cntr(env, agent, init_vars):
     loss_cntr_stat = []
     batch_episode_counter = 0
 
-    agent.cntr_epsilon = 0.05 # fixed at a small number
+    agent.cntr_policy_temp = 0.05 # fixed at a small number
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
 
@@ -904,7 +1162,7 @@ def test_cntr(env, agent, init_vars):
 
 
         #  THIS IS THE END OF ONE EPISODE
-        print("cntr_epsilon: " + str(agent.cntr_epsilon))
+        print("cntr_policy_temp: " + str(agent.cntr_policy_temp))
         # loss_cntr_stat.append(loss_cntr_epis/episode_steps)
 
 
@@ -944,10 +1202,12 @@ def main(args):
 
     env, agent, init_vars = init(args)
 
-    if init_vars["main_function"] == "train_only_cntr" :
+    if init_vars["main_function"] == "train_cntr" :
         train_cntr(env, agent, init_vars)
-    elif init_vars["main_function"] == "train_cntr_meta" :
+    elif init_vars["main_function"] == "train_dhrl" :
         train_DHRL(env, agent, init_vars)
+    elif init_vars["main_function"] == "train_meta" :
+        train_meta(env, agent, init_vars)
     elif init_vars["main_function"] == "test_cntr":
         test_cntr(env, agent, init_vars)
     elif init_vars["main_function"] == "test_both":
@@ -960,7 +1220,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='PyTorch Relational-RL')
     parser.add_argument('--fileName',type=str, default="0")
-    parser.add_argument('--train_only_cntr ', default=False)
+    parser.add_argument('--train_cntr ', default=False)
 
     parser.add_argument('--model', type=str, choices=['RN', 'CNN_MLP'], default='RN', 
                         help='resume from model stored')
