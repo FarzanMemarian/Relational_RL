@@ -1,2 +1,0 @@
-game_won_counter: 42
-game_over_counter: 958

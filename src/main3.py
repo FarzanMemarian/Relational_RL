@@ -6,7 +6,7 @@ from collections import namedtuple
 import sys
 sys.path.append('../')
 from envs.gridworld3 import Gridworld
-from agent.agent3 import hDQN, cntr_net_conv_MLP, cntr_net_MLP
+from agent.agent3 import hDQN, net_conv_MLP, net_MLP
 import transformer
 from utils import utils
 import copy
@@ -22,25 +22,39 @@ import pickle
 import time
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
 
 def init(args):
 
-    NOTE = "bigger gridworld, reset_total, conv_MLP" 
+    NOTE = "reset_total, transformer is using cnn again" 
 
     # *****************
     init_vars = {}
-    init_vars["fileName"] = "3_meta_v0"
-    init_vars["pretrained_cntr_folder"] = "3_cntr_dev" # folder name for trained cntr network
-    init_vars["main_function"]  = ["train_cntr","train_dhrl","train_meta","test_cntr","test_both"][2]
+    init_vars["fileName"] = "3_meta_v8"
+    init_vars["pretrained_cntr_folder"] = "3_cntr_v4" # folder name for trained cntr network
+    init_vars["pretrained_meta_folder"] = "3_meta_v4" # folder name for trained meta network
+    init_vars["main_function"]  = ["train_cntr","train_meta","train_dhrl","test_cntr","test_both"][1]
     init_vars["num_epis"] = 300000
     #  WRITE PERIODS
     init_vars["stat_period_dhrl"] = 20
-    init_vars["stat_period_cntr"] = 100
-    init_vars["reset_type"] = ["reset","reset_finite","reset_total"][0]
+    init_vars["stat_period_cntr"] = 50
+    init_vars["reset_type"] = ["reset","reset_finite","reset_total"][2]
     init_vars["run_mode"] = ["restart","continue"][0]
     init_vars["no_anneal"] = False
+    init_vars["verbose"] = [False, True][0]
+    init_vars["device"] = ["cpu","cuda"][1]
     # *****************
+
+    # GRID WORLD GEOMETRICAL PARAMETERS
+    n_dim = 7 # pick odd numbers
+    n_obj = 3
+    min_num = 1
+    max_num = 10
+    num_gridworlds = 10 # used only if reset_finite is picked
+
+
+    # Network type
+    cntr_network = ["MLP", "conv_MLP", "transformer"][2] 
+    meta_network = ["MLP", "conv_MLP", "transformer"][2]
 
     # LOSS params
     meta_loss = ["SmoothL1Loss", "MSEloss"][0]
@@ -50,16 +64,6 @@ def init(args):
     cntr_loss = ["SmoothL1Loss", "MSEloss"][0]
     cntr_optimizer = ["Adam", "RMSprop", "SGD"][0]
     cntr_lr = 0.0001
-
-    # Network type
-    cntr_network = ["conv_MLP","MLP"][1] 
-
-    # GRID WORLD GEOMETRICAL PARAMETERS
-    n_dim = 7 # pick odd numbers
-    n_obj = 5
-    min_num = 1
-    max_num = 10
-    num_gridworlds = 5 # used only if reset_finite is picked
 
     # extr REWARDS (to be used by the meta controller)
     game_over_reward = -1
@@ -77,14 +81,14 @@ def init(args):
     cntr_clamp = False
 
     # PARAMETERS OF META 
-    meta_batch_size = 128
+    meta_batch_size = 32
     init_vars["meta_eps_start_temp"] = 0.001
     init_vars["meta_eps_end_temp"] = 5
     init_vars["meta_eps_decay_temp"] = 100000
     meta_memory_size = 10000
 
     # PARAMETERS OF CNTR
-    batch_size = 128
+    batch_size = 32
     gamma = 0.9
     init_vars["cntr_eps_start_temp"] = 0.001
     init_vars["cntr_eps_end_temp"] = 5
@@ -134,7 +138,9 @@ def init(args):
                 cntr_lr = cntr_lr,
                 meta_clamp = meta_clamp,
                 cntr_clamp = cntr_clamp,
-                cntr_network = cntr_network
+                cntr_network_name = cntr_network,
+                meta_network_name = meta_network,
+                device = init_vars["device"]
                 )
 
     params_cntr_run = {
@@ -146,8 +152,8 @@ def init(args):
             "stat_period_cntr" : init_vars["stat_period_cntr"],
             "reset_type" : init_vars["reset_type"], 
             "no_anneal" : init_vars["no_anneal"], 
-            "cntr_clamp" : cntr_clamp,
             "cntr_network" : cntr_network,
+            "meta_network" : meta_network,
             "n_dim" : n_dim, 
             "n_obj":n_obj, 
             "min_num" : min_num,
@@ -158,6 +164,7 @@ def init(args):
             "int_wrong_goal_reward":int_wrong_goal_reward,
             "batch_size":batch_size,
             "gamma":gamma,
+            "cntr_clamp" : cntr_clamp,
             "cntr_eps_start_temp" : init_vars["cntr_eps_start_temp"],
             "cntr_eps_end_temp" : init_vars["cntr_eps_end_temp"],
             "cntr_eps_decay_temp" : init_vars["cntr_eps_decay_temp"],
@@ -165,7 +172,7 @@ def init(args):
             "cntr_loss" : cntr_loss,
             "cntr_optimizer" : cntr_optimizer,
             "cntr_lr" : cntr_lr,
-            "device" : device
+            "device" : init_vars["device"]
             }
 
     params_dhrl_run = {
@@ -178,9 +185,8 @@ def init(args):
             "stat_period_cntr" : init_vars["stat_period_cntr"],
             "reset_type" : init_vars["reset_type"], 
             "no_anneal" : init_vars["no_anneal"], 
-            "meta_clamp" : meta_clamp,
-            "cntr_clamp" : cntr_clamp,
             "cntr_network" : cntr_network,
+            "meta_network" : meta_network,
             "n_dim" : n_dim, 
             "n_obj":n_obj, 
             "min_num" : min_num,
@@ -196,6 +202,8 @@ def init(args):
             "batch_size":batch_size,
             "meta_batch_size":meta_batch_size, 
             "gamma":gamma,
+            "meta_clamp" : meta_clamp,
+            "cntr_clamp" : cntr_clamp,
             "meta_eps_start_temp" : init_vars["meta_eps_start_temp"],
             "meta_eps_end_temp" : init_vars["meta_eps_end_temp"],
             "meta_eps_decay_temp" : init_vars["meta_eps_decay_temp"],
@@ -211,7 +219,7 @@ def init(args):
             "cntr_loss" : cntr_loss,
             "cntr_optimizer" : cntr_optimizer,
             "cntr_lr" : cntr_lr,
-            "device" : device
+            "device" : init_vars["device"]
             }
 
     params_meta_run = {
@@ -222,7 +230,7 @@ def init(args):
             "stat_period_dhrl" : init_vars["stat_period_dhrl"],
             "reset_type" : init_vars["reset_type"], 
             "no_anneal" : init_vars["no_anneal"], 
-            "meta_clamp" : meta_clamp,
+            "meta_network" : meta_network,
             "n_dim" : n_dim, 
             "n_obj":n_obj, 
             "min_num" : min_num,
@@ -238,6 +246,7 @@ def init(args):
             "batch_size":batch_size,
             "meta_batch_size":meta_batch_size, 
             "gamma":gamma,
+            "meta_clamp" : meta_clamp,
             "meta_eps_start_temp" : init_vars["meta_eps_start_temp"],
             "meta_eps_end_temp" : init_vars["meta_eps_end_temp"],
             "meta_eps_decay_temp" : init_vars["meta_eps_decay_temp"],
@@ -245,15 +254,16 @@ def init(args):
             "meta_loss" : meta_loss,
             "meta_optimizer" : meta_optimizer,
             "meta_lr" : meta_lr,
+            "device" : init_vars["device"]
             }
 
-    logs_address, models_address, _ = addresses(init_vars)
+    logs_address, models_address, _, _ = addresses(init_vars)
     param_file = "params_" + init_vars["main_function"]
     if init_vars["main_function"] == "train_cntr":
         param_var = params_cntr_run
     elif init_vars["main_function"] == "train_meta":
         param_var = params_meta_run
-    else:
+    elif init_vars["main_function"] == "train_dhrl":
         param_var = params_dhrl_run
 
     create_directories(init_vars)
@@ -283,13 +293,15 @@ def addresses(init_vars):
     logs_address = "../logs/" + init_vars["fileName"] + "/"
     models_address = "../saved_models/" + init_vars["fileName"] + "/"
     read_cntr_address = "../saved_models/" + init_vars["pretrained_cntr_folder"] + "/"
-    return logs_address, models_address, read_cntr_address
+    read_meta_address = "../saved_models/" + init_vars["pretrained_meta_folder"] + "/"
+    return logs_address, models_address, read_cntr_address, read_meta_address
 
 def train_DHRL(env, agent, init_vars):
     # this should only be run after train_cntr has been run
+    device = init_vars["device"]
 
     # creating the folder names
-    logs_address, models_address, read_cntr_address = addresses(init_vars)
+    logs_address, models_address, read_cntr_address, read_meta_address  = addresses(init_vars)
     num_epis = init_vars["num_epis"]
     meta_eps_start_temp = init_vars["meta_eps_start_temp"]
     meta_eps_end_temp = init_vars["meta_eps_end_temp"]
@@ -298,19 +310,35 @@ def train_DHRL(env, agent, init_vars):
     cntr_eps_end_temp = init_vars["cntr_eps_end_temp"]
     cntr_eps_decay_temp = init_vars["cntr_eps_decay_temp"]
 
-    # Load models
-    if agent.cntr_network_name == "conv_MLP":
-        agent.policy_cntr_net = cntr_net_conv_MLP(ndim=env.n_dim).to(device)
-        agent.target_cntr_net = cntr_net_conv_MLP(ndim=env.n_dim).to(device)
+    # Load cntr models
     if agent.cntr_network_name == "MLP":
-        agent.policy_cntr_net = cntr_net_MLP(ndim=env.n_dim).to(device)
-        agent.target_cntr_net = cntr_net_MLP(ndim=env.n_dim).to(device)
-    
+        agent.policy_cntr_net = net_MLP(ndim=env.n_dim, out_dim=1).to(device)
+        agent.target_cntr_net = net_MLP(ndim=env.n_dim, out_dim=1).to(device)
+    elif agent.cntr_network_name == "conv_MLP":
+        agent.policy_cntr_net = net_conv_MLP(ndim=env.n_dim, out_dim=1).to(device)
+        agent.target_cntr_net = net_conv_MLP(ndim=env.n_dim, out_dim=1).to(device)
     agent.policy_cntr_net.load_state_dict(torch.load(read_cntr_address + "policy_cntr_net_train_cntr.pt"))
     agent.cntr_optimizer, agent.cntr_criterion = agent.set_optim(agent.policy_cntr_net.parameters(), 
             agent.cntr_optimizer_name, agent.cntr_loss_name, agent.cntr_lr_name)   
     agent.target_cntr_net.load_state_dict(torch.load(read_cntr_address + "target_cntr_net_train_cntr.pt"))
     agent.target_cntr_net.eval()
+
+    # Load meta models
+    if agent.meta_network_name == "MLP":
+        agent.policy_meta_net = net_MLP(ndim=env.n_dim, out_dim=4).to(device)
+        agent.target_meta_net = net_MLP(ndim=env.n_dim, out_dim=4).to(device)
+    elif agent.meta_network_name == "conv_MLP":
+        agent.policy_meta_net = net_conv_MLP(ndim=env.n_dim, out_dim=4).to(device)
+        agent.target_meta_net = net_conv_MLP(ndim=env.n_dim, out_dim=4).to(device)
+    elif agent.meta_network_name == "transformer":
+        agent.policy_meta_net = transformer.att_class(n_dim=env.n_dim, out_dim=4, device=device)
+        agent.target_meta_net = transformer.att_class(n_dim=env.n_dim, out_dim=4, device=device)
+
+    agent.policy_meta_net.load_state_dict(torch.load(read_meta_address + "policy_meta_net_train_meta.pt"))
+    agent.meta_optimizer, agent.meta_criterion = agent.set_optim(agent.policy_meta_net.parameters(), 
+            agent.meta_optimizer_name, agent.meta_loss_name, agent.meta_lr_name)   
+    agent.target_meta_net.load_state_dict(torch.load(read_meta_address + "target_meta_net_train_meta.pt"))
+    agent.target_meta_net.eval()
 
     if init_vars["reset_type"] == 'reset': 
         env_state = torch.load(read_cntr_address + "env_state.pt")
@@ -340,12 +368,7 @@ def train_DHRL(env, agent, init_vars):
     batch_episode_counter = 0
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
-        if init_vars["reset_type"] == 'reset': 
-            agent_state, env_state = env.reset() 
-        if init_vars["reset_type"] == 'reset_total':
-            agent_state, env_state = env.reset_total() 
-        if init_vars["reset_type"] == 'reset_finite':
-            agent_state, env_state = env.reset_finite() 
+        agent_state, env_state = env.reset(init_vars["reset_type"]) 
 
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
@@ -363,7 +386,7 @@ def train_DHRL(env, agent, init_vars):
             print("\nNew Goal: "  + str(meta_goal) + "\n")
             total_extr_reward = 0
 
-            agent_env_state_0 = utils.agent_env_state(agent_state, env_state) # for meta controller start state
+            agent_env_state_0 = utils.agent_env_state(agent_state, env_state, device) # for meta controller start state
             meta_goal_reached = False
             cntr_steps = 0
             while not terminal and not meta_goal_reached: # this loop is for meta, while state not terminal
@@ -446,8 +469,8 @@ def train_DHRL(env, agent, init_vars):
 
                 # if env.env_state[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
-                agent_env_state = utils.agent_env_state(agent_state, env_state)
-                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state)
+                agent_env_state = utils.agent_env_state(agent_state, env_state, device)
+                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state, device)
                 next_available_actions = env.allowable_actions[i,j]
 
                 # if the state is terminal, the experiment will not even be added to the cntr_Transition
@@ -468,7 +491,7 @@ def train_DHRL(env, agent, init_vars):
                     cntr_logs_list.append([meta_goal_reached, current_target_reached, cntr_steps, 
                         episode_steps, episode])
 
-            next_agent_env_state = utils.agent_env_state(agent_state, env_state)
+            next_agent_env_state = utils.agent_env_state(agent_state, env_state, device)
             next_available_goals = env.current_objects
             meta_exp_counter += 1 
             exp_meta = copy.deepcopy([agent_env_state_0, torch.tensor([meta_goal], dtype=torch.float, device=device), total_extr_reward, 
@@ -564,14 +587,14 @@ def train_DHRL(env, agent, init_vars):
 def train_meta(env, agent, init_vars):
     # this function assumes that any object picked by the meta controller is always pickec 
     # bypassing the controller
+    device = init_vars["device"]
 
     # creating the folder names
-    logs_address, models_address, _ = addresses(init_vars)
+    logs_address, models_address, read_cntr_address, read_meta_address = addresses(init_vars)
     num_epis = init_vars["num_epis"]
     meta_eps_start_temp = init_vars["meta_eps_start_temp"]
     meta_eps_end_temp = init_vars["meta_eps_end_temp"]
     meta_eps_decay_temp = init_vars["meta_eps_decay_temp"]
-
 
     visits = np.zeros((env.n_dim, env.n_dim))
     game_won_counter = 0
@@ -595,12 +618,8 @@ def train_meta(env, agent, init_vars):
     update_stat_period_time_accum = 0
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
-        if init_vars["reset_type"] == 'reset': 
-            agent_state, env_state = env.reset() 
-        if init_vars["reset_type"] == 'reset_total':
-            agent_state, env_state = env.reset_total() 
-        if init_vars["reset_type"] == 'reset_finite':
-            agent_state, env_state = env.reset_finite() 
+
+        agent_state, env_state = env.reset(init_vars["reset_type"]) 
 
         terminal = False
         loss_meta_epis = 0
@@ -618,7 +637,7 @@ def train_meta(env, agent, init_vars):
             print("\nNew Goal: "  + str(meta_goal) + "\n")
             total_extr_reward = 0
 
-            agent_env_state_0 = utils.agent_env_state(agent_state, env_state) # for meta controller start state
+            agent_env_state_0 = utils.agent_env_state(agent_state, env_state, device) # for meta controller start state
             meta_goal_reached = False
             while not terminal and not meta_goal_reached: # this loop is for meta, while state not terminal
                 episode_steps += 1
@@ -682,8 +701,8 @@ def train_meta(env, agent, init_vars):
 
                 # if env.env_state[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
-                agent_env_state = utils.agent_env_state(agent_state, env_state)
-                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state)
+                agent_env_state = utils.agent_env_state(agent_state, env_state,device)
+                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state, device)
                 next_available_actions = env.allowable_actions[i,j]
 
                 # if the state is terminal, the experiment will not even be added to the cntr_Transition
@@ -699,7 +718,7 @@ def train_meta(env, agent, init_vars):
                 agent_state = copy.deepcopy(next_agent_state)
                 env_state = copy.deepcopy(next_env_state)
 
-            next_agent_env_state = utils.agent_env_state(agent_state, env_state)
+            next_agent_env_state = utils.agent_env_state(agent_state, env_state, device)
             next_available_goals = env.current_objects
             meta_exp_counter += 1 
             exp_meta = copy.deepcopy([agent_env_state_0, torch.tensor([meta_goal], dtype=torch.float, device=device), total_extr_reward, 
@@ -765,18 +784,17 @@ def train_meta(env, agent, init_vars):
 
             print ("SAVING THE MODELS .............")  
             print ()
-            torch.save(agent.policy_meta_net.state_dict(), models_address + "policy_meta_net.pt")
-            torch.save(agent.target_meta_net.state_dict(), models_address + "target_meta_net.pt")
-            torch.save(agent.policy_cntr_net.state_dict(), models_address + "policy_cntr_net.pt")
-            torch.save(agent.target_cntr_net.state_dict(), models_address + "target_cntr_net.pt")
+            torch.save(agent.policy_meta_net.state_dict(), models_address + "policy_meta_net_train_meta.pt")
+            torch.save(agent.target_meta_net.state_dict(), models_address + "target_meta_net_train_meta.pt")
 
             start_stat_period_time = time.time()
             update_stat_period_time_accum = 0
 
 def train_cntr(env, agent, init_vars):
 
+    device = init_vars["device"]
     # creating the folders
-    logs_address, models_address, _ = addresses(init_vars)
+    logs_address, models_address, _, _ = addresses(init_vars)
     num_epis = init_vars["num_epis"]
     meta_eps_start_temp = init_vars["meta_eps_start_temp"]
     meta_eps_end_temp = init_vars["meta_eps_end_temp"]
@@ -808,14 +826,9 @@ def train_cntr(env, agent, init_vars):
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
 
-        if init_vars["reset_type"] == 'reset': 
-            agent_state, env_state = env.reset() 
-        elif init_vars["reset_type"] == 'reset_total':
-            agent_state, env_state = env.reset_total() 
-        elif init_vars["reset_type"] == 'reset_finite':
-            agent_state, env_state = env.reset_finite() 
+        agent_state, env_state = env.reset(init_vars["reset_type"]) 
 
-        set_trace()
+
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
         non_meta_goal_reached = False
@@ -831,7 +844,8 @@ def train_cntr(env, agent, init_vars):
             while not terminal and not meta_goal_reached: # this loop is for cntr, while state not terminal
                 cntr_steps += 1
                 episode_steps += 1
-                action_idx, action = agent.select_action(agent_state, env_state, meta_goal) # cntr selects an action among permitable actions
+                action_idx, action, action_probs = agent.select_action(agent_state, env_state, meta_goal) # cntr selects an action among permitable actions
+                # print ("---------- action_probs: {}".format(action_probs))
                 # print(str((state,action)) + "; ")
 
                 next_agent_state, next_env_state = env.step(action_idx) # RIGHT NOW THE DONE IS NOT IMPLEMENTED YET 
@@ -847,11 +861,12 @@ def train_cntr(env, agent, init_vars):
                     non_meta_goal_reached = True
                 else:
                     non_meta_goal_reached = False
-                # print ("state before action ----> " + "[" + str(agent_state[0,0].item()) +", " + 
-                #         str(agent_state[0,1].item()) + "]" )
-                # print ("action ----> "  + action)
-                # print ("state after action ----> " + "[" + str(i) +", " + str(j) + "]" )
-                # print ("---------------------")
+                if init_vars["verbose"]:
+                    print ("state before action ----> " + "[" + str(agent_state[0,0].item()) +", " + 
+                            str(agent_state[0,1].item()) + "]" )
+                    print ("action ----> "  + action)
+                    print ("state after action ----> " + "[" + str(i) +", " + str(j) + "]" )
+                    print ("---------------------")
                 game_over, game_won = env.is_terminal(next_agent_state)
                 terminal = game_over or game_won # terminal refers to next state
                 cntr_done = non_meta_goal_reached or meta_goal_reached
@@ -906,8 +921,8 @@ def train_cntr(env, agent, init_vars):
                 # if env.env_state[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
 
-                agent_env_state = utils.agent_env_state(agent_state, env_state)
-                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state)
+                agent_env_state = utils.agent_env_state(agent_state, env_state, device)
+                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state, device)
                 next_available_actions = env.allowable_actions[i,j]
 
                 # if the state is terminal, the experiment will not even be added to the cntr_Transition
@@ -947,14 +962,13 @@ def train_cntr(env, agent, init_vars):
             #         agent.cntr_policy_temp -= anneal_factor
             #     else:
             #         agent.cntr_policy_temp = 1 - success_ratio
-                
+            
             # if agent.cntr_policy_temp < 0.05:
             #     agent.cntr_policy_temp = 0.05
 
 
-        
-        if episode != 0 and episode % (init_vars["stat_period_cntr"]-1) == 0:
 
+        if episode != 0 and episode % (init_vars["stat_period_cntr"]-1) == 0:
             elapsed_stat_period_time = time.time() - start_stat_period_time
 
             success_ratio = cntr_success/(cntr_success+cntr_failure)
@@ -999,7 +1013,8 @@ def train_cntr(env, agent, init_vars):
 
 def test_cntr(env, agent, init_vars):
 
-    logs_address, models_address, read_cntr_address = addresses(init_vars)
+    device = init_vars["device"]
+    logs_address, models_address, read_cntr_address, _ = addresses(init_vars)
     num_epis = init_vars["num_epis"]
     meta_eps_start_temp = init_vars["meta_eps_start_temp"]
     meta_eps_end_temp = init_vars["meta_eps_end_temp"]
@@ -1044,10 +1059,8 @@ def test_cntr(env, agent, init_vars):
     for episode in range(num_epis):
         print("\n\n\n\n### EPISODE "  + str(episode) + "###")
 
-        if init_vars["reset_type"] == 'reset': 
-            agent_state, env_state = env.reset() 
-        if init_vars["reset_type"] == 'reset_total':
-            agent_state, env_state = env.reset_total() 
+        agent_state, env_state = env.reset(init_vars["reset_type"]) 
+
         visits[agent_state[0,0].item(), agent_state[0,1].item()] += 1
         terminal = False
         non_meta_goal_reached = False
@@ -1138,8 +1151,8 @@ def test_cntr(env, agent, init_vars):
                 # if env.env_state[next_agent_state[0], next_agent_state[1]] == env.original_objects[-1]:
                 #     print("final object/number picked!! ")
 
-                agent_env_state = utils.agent_env_state(agent_state, env_state)
-                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state)
+                agent_env_state = utils.agent_env_state(agent_state, env_state, device)
+                next_agent_env_state = utils.agent_env_state(next_agent_state, next_env_state, device)
                 next_available_actions = env.allowable_actions[i,j]
 
                 # if the state is terminal, the experiment will not even be added to the cntr_Transition
@@ -1196,6 +1209,7 @@ def test_cntr(env, agent, init_vars):
                             line[1],line[2],line[3],line[4]))
 
 def test_both():
+
     pass
 
 def main(args):

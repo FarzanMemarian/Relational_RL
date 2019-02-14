@@ -3,8 +3,6 @@ import torch
 import copy
 from pdb import set_trace
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
 
 
 # def meta_input(D_in, agent_state, env_state, goal):
@@ -33,7 +31,7 @@ device = torch.device("cpu")
 # 	cntr_input[1][agent_state[0,0], agent_state[0,1]] = -1
 # 	return cntr_input	
 
-def agent_env_state(agent_state, env_state):
+def agent_env_state(agent_state, env_state, device):
 	agent_env_state = copy.deepcopy(env_state)
 	agent_env_state[agent_state[0,0], agent_state[0,1]] = -1
 	return torch.unsqueeze(agent_env_state,0).to(device)
@@ -43,8 +41,7 @@ def agent_env_state(agent_state, env_state):
 # 	agent_env_state[agent_state[0,0], agent_state[0,1]] = -1
 # 	return torch.unsqueeze(torch.unsqueeze(agent_env_state,0),0).to(device)
 
-def agent_env_state_deep(agent_state, env_state):
+def agent_env_state_deep(agent_state, env_state, device):
 	agent_env_state = copy.deepcopy(env_state)
 	agent_env_state[agent_state[0,0], agent_state[0,1]] = -1
 	return torch.unsqueeze(agent_env_state,0).to(device)
-	

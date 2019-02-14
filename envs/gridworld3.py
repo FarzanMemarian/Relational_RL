@@ -42,28 +42,24 @@ class Gridworld: # Environment
 
         # objects, gridworld and goals
         self.agent_loc = torch.zeros((1,2),dtype=torch.int)
-        self.env_state = None
-        self.is_env_state_created = False
-        self.original_objects = None
-        self.current_objects = None
-        self.original_object_idxs = None
-        self.current_object_idxs = None
         self.env_state_original = None
-        self.env_state_finite_store = None
+        self.original_objects = None
+        self.original_object_idxs = None
+        self.is_env_state_created = False
+        
+        self.env_state = None
+        self.current_objects = None
+        self.current_object_idxs = None
+        self.selected_goals = None
+        self.current_target_goal = None
+        self.current_target_goal_idx = None
+
+        self.gridworld_finite_store = None
 
         if reset_type == "reset_finite":
-            self.env_state_finite_store = self._create_multiple_env_states()
-            self.reset_finite()
-        elif reset_type == "reset":
-            self.reset()
-        elif reset_type == "reset_total":
-            self.reset_total()
+            self.gridworld_finite_store = self._create_multiple_gridworlds()
+        self.reset(reset_type)
 
-
-        
-        self.selected_goals = []
-        self.current_target_goal = self.current_objects[0]
-        self.current_target_goal_idx = self.current_object_idxs[0]
 
 
         # actions
@@ -137,60 +133,46 @@ class Gridworld: # Environment
         idx_2d = [[2*math.floor(idx/small_matrix_dim), 2*int(idx%small_matrix_dim)] for idx in idx_1d]
         object_idxs = []
         for counter, idx in enumerate(idx_2d):
-            self.env_state[idx[0], idx[1]] = self.original_objects[counter]
+            self.env_state_original[idx[0], idx[1]] = self.original_objects[counter]
             object_idxs.append((idx[0],idx[1]))
         return object_idxs
 
 
-    def _create_multiple_env_states(self):
+    def _create_multiple_gridworlds(self):
         state_list = []
         for _ in range(self.num_gridworlds):
-            self.env_state = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
+            self.env_state_original = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
             self.original_objects = self._create_objects()
             self.original_object_idxs = self._place_objects()
-            state_list.append([copy.deepcopy(self.env_state), copy.deepcopy(self.original_objects), 
+            state_list.append([copy.deepcopy(self.env_state_original), copy.deepcopy(self.original_objects), 
                 copy.deepcopy(self.original_object_idxs)])
         return state_list
 
 
-    def reset(self): 
+    def reset(self, reset_type): 
+        if reset_type == "reset":
         # the function creates the same gridworld as the original
-        if not self.is_env_state_created:
-            self.env_state = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
+            if not self.is_env_state_created:
+                self.env_state_original = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
+                self.original_objects = self._create_objects()
+                self.original_object_idxs = self._place_objects()
+                self.is_env_state_created = True
+
+        elif reset_type == "reset_total":
+            # whole gridworld is created from the beginning and agent is 
+                        # placed in a random position
+            self.env_state_original = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
             self.original_objects = self._create_objects()
             self.original_object_idxs = self._place_objects()
-            self.is_env_state_created = True
 
-        self.env_state_original = copy.deepcopy(self.env_state)
-        self.current_objects = copy.deepcopy(self.original_objects)
-        self.current_object_idxs = copy.deepcopy(self.original_object_idxs)
-        self.selected_goals = []
-        self.current_target_goal = self.current_objects[0]
-        self.current_target_goal_idx = self.current_object_idxs[0]
-        self.agent_loc[0,:] = self._random_start()
-        return copy.deepcopy(self.agent_loc), copy.deepcopy(self.env_state)
+        elif reset_type == "reset_finite":
+            # sample from a set of gridworlds created in _create_multiple_gridworlds
+            sample = random.sample(self.gridworld_finite_store,1)[0]
+            self.env_state_original = copy.deepcopy(sample[0])
+            self.original_objects = copy.deepcopy(sample[1])
+            self.original_object_idxs = copy.deepcopy(sample[2])
 
-    def reset_total(self): # whole gridworld is created from the beginning and agent is 
-                    # placed in a random position
-        self.env_state = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
-        self.original_objects = self._create_objects()
-        self.original_object_idxs = self._place_objects()
-        self.env_state_original = copy.deepcopy(self.env_state)
-        self.current_objects = copy.deepcopy(self.original_objects)
-        self.current_object_idxs = copy.deepcopy(self.original_object_idxs)
-        self.selected_goals = []
-        self.current_target_goal = self.current_objects[0]
-        self.current_target_goal_idx = self.current_object_idxs[0]
-        self.agent_loc[0,:] = self._random_start()
-        return copy.deepcopy(self.agent_loc), copy.deepcopy(self.env_state)
-
-    def reset_finite(self): # whole gridworld is created from the beginning and agent is 
-                    # placed in a random position
-        sample = random.sample(self.env_state_finite_store,1)[0]
-        self.env_state = copy.deepcopy(sample[0])
-        self.original_objects = copy.deepcopy(sample[1])
-        self.original_object_idxs = copy.deepcopy(sample[2])
-        self.env_state_original = copy.deepcopy(self.env_state)
+        self.env_state = copy.deepcopy(self.env_state_original)
         self.current_objects = copy.deepcopy(self.original_objects)
         self.current_object_idxs = copy.deepcopy(self.original_object_idxs)
         self.selected_goals = []
@@ -213,23 +195,11 @@ class Gridworld: # Environment
                 done = True
         return start
 
-
     def remove_object(self, i, j):
         self.env_state[i,j] = 0
         self.current_object_idxs.pop(0)
         removed_object = self.current_objects.pop(0)
         return removed_object
-
-
-
-    def set_state(self, s):
-        self.agent_loc[0,:] = s[0,:]
-    
-    def print_grid(self):
-        print (self.env_state)
-    
-    def current_agent_state(self):
-        return self.agent_loc
 
     def step(self, action_idx):
         i = self.agent_loc[0,0].item()
@@ -321,6 +291,15 @@ class Gridworld: # Environment
                 game_over = True
 
         return game_over, game_won
+
+    def set_state(self, s):
+        self.agent_loc[0,:] = s[0,:]
+    
+    def print_grid(self):
+        print (self.env_state)
+    
+    def current_agent_state(self):
+        return self.agent_loc
 
     def undo_move(self, action):
     # these are the opposite of what U/D/L/R should normally do

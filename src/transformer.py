@@ -25,7 +25,7 @@ from pdb import set_trace
 # The encoder is composed of a stack of $N=6$ identical layers. 
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
+# device = torch.device("cpu")
 
 
 def clones(module, N):
@@ -257,10 +257,77 @@ class PositionwiseFeedForward(nn.Module):
 # 
 # > Here we define a function from hyperparameters to a full model. 
 
-class meta_class(nn.Module):
-    def __init__(self, n_dim=5, final_conv_dim=3, N=6, last_conv_depth=29, 
-               d_model=4, d_ff=80, h=4, dropout=0.1):
+# class att_class(nn.Module):
+#     def __init__(self, n_dim=5, final_conv_dim=3, N=6, last_conv_depth=29, 
+#                d_model=4, d_ff=80, h=4, dropout=0.1, out_dim=1, device='cpu'):
+#         super().__init__()
+#         self.device = device
+#         self.n_dim = n_dim
+#         # self.conv1 = nn.Conv2d(1,  16, kernel_size=2)
+#         # self.bn1 = nn.BatchNorm2d(16)
+#         # self.conv2 = nn.Conv2d(16, last_conv_depth, kernel_size=2)
+#         # self.bn2 = nn.BatchNorm2d(last_conv_depth)
+#         # # an affine operation: y = Wx + b
+#         # self.last_conv_depth = last_conv_depth
+#         # self.final_conv_dim = final_conv_dim
+#         self.c = copy.deepcopy
+#         self.d_model=d_model 
+#         self.d_ff=d_ff 
+#         self.h=h 
+#         self.dropout=dropout
+#         self.attn = MultiHeadedAttention(self.h, self.d_model)
+#         self.ff = PositionwiseFeedForward(self.d_model, self.d_ff, self.dropout)
+#         self.EncoderLayer = EncoderLayer(self.d_model, self.c(self.attn), self.c(self.ff), self.dropout)
+#         self.Encoder = Encoder(self.EncoderLayer, N)
+#         # self.fc1 = nn.Linear(self.final_conv_dim**2 * (self.last_conv_depth+3), 40)
+#         self.fc1 = nn.Linear(self.n_dim**2 *4, 40) 
+#         self.fc2 = nn.Linear(40, out_dim)
+
+
+
+#     def forward(self, x, g):
+#         "Helper: Construct a model from hyperparameters."
+#         x, batch_size = self.append_pos(x)
+#         x = x.view(batch_size, -1, 3)
+#         x = self.append_goal(x,g)
+#         x = self.Encoder(x, None)
+#         x = x.view(-1, self.num_flat_features(x))
+#         x = F.relu(self.fc1(x))
+#         x = self.fc2(x)
+#         return x
+        
+#     def append_pos(self, x):
+#         batch_size, depth, n, n = x.size()
+#         pos_tensor = torch.zeros((batch_size, 2 ,n, n), device=self.device)
+#         coord = np.linspace(-1,1,n)
+#         for i in range(n):
+#             for j in range(n):
+#                 pos_tensor[:,0,i,j]=coord[i]
+#                 pos_tensor[:,1,i,j]=coord[j]
+#         x = torch.cat((x,pos_tensor), 1)
+#         return x, batch_size
+
+#     def append_goal(self,x,g):
+#         batch_size, n_squared, p = x.size()
+#         goal_tensor = torch.zeros((batch_size, n_squared, 1), device=self.device)
+#         for i in range(batch_size):
+#             goal_tensor[i,:,0] = g[i,0]
+#         x = torch.cat((x,goal_tensor), 2)
+#         return x
+
+#     def num_flat_features(self, x):
+#         size = x.size()[1:]  # all dimensions except the batch dimension
+#         num_features = 1
+#         for s in size:
+#             num_features *= s
+#         return num_features  
+
+
+class att_class(nn.Module):
+    def __init__(self, n_dim=5, N=6, last_conv_depth=29, 
+               d_model=32, d_ff=80, h=8, dropout=0.1, out_dim=1, device='cpu'):
         super().__init__()
+        self.device = device
         self.n_dim = n_dim
         self.conv1 = nn.Conv2d(1,  16, kernel_size=2)
         self.bn1 = nn.BatchNorm2d(16)
@@ -268,7 +335,7 @@ class meta_class(nn.Module):
         self.bn2 = nn.BatchNorm2d(last_conv_depth)
         # an affine operation: y = Wx + b
         self.last_conv_depth = last_conv_depth
-        self.final_conv_dim = final_conv_dim
+        self.final_conv_dim = n_dim - 2
         self.c = copy.deepcopy
         self.d_model=d_model 
         self.d_ff=d_ff 
@@ -278,38 +345,26 @@ class meta_class(nn.Module):
         self.ff = PositionwiseFeedForward(self.d_model, self.d_ff, self.dropout)
         self.EncoderLayer = EncoderLayer(self.d_model, self.c(self.attn), self.c(self.ff), self.dropout)
         self.Encoder = Encoder(self.EncoderLayer, N)
-        # self.fc1 = nn.Linear(self.final_conv_dim**2 * (self.last_conv_depth+3), 40)
-        self.fc1 = nn.Linear(self.n_dim**2 *4, 40) 
-        self.fc2 = nn.Linear(40, 1)
-
-    # def forward(self, x, g):
-    #     "Helper: Construct a model from hyperparameters."
-    #     x = F.relu(self.bn1(self.conv1(x)))
-    #     x = F.relu(self.bn2(self.conv2(x)))
-    #     set_trace()
-    #     x, batch_size = self.append_pos(x)
-    #     x = x.view(batch_size, -1, self.last_conv_depth+2)
-    #     x = self.append_goal(x,g)
-    #     x = self.Encoder(x, None)
-    #     x = x.view(-1, self.num_flat_features(x))
-    #     x = F.relu(self.fc1(x))
-    #     x = self.fc2(x)
-    #     return x
+        self.fc1 = nn.Linear(self.final_conv_dim**2 * (self.last_conv_depth+3), 40)
+        self.fc2 = nn.Linear(40, out_dim)
 
     def forward(self, x, g):
         "Helper: Construct a model from hyperparameters."
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
         x, batch_size = self.append_pos(x)
-        x = x.view(batch_size, -1, 3)
+        x = x.view(batch_size, -1, self.last_conv_depth+2)
         x = self.append_goal(x,g)
         x = self.Encoder(x, None)
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
+
         
     def append_pos(self, x):
         batch_size, depth, n, n = x.size()
-        pos_tensor = torch.zeros((batch_size, 2 ,n, n), device=device)
+        pos_tensor = torch.zeros((batch_size, 2 ,n, n), device=self.device)
         coord = np.linspace(-1,1,n)
         for i in range(n):
             for j in range(n):
@@ -320,7 +375,7 @@ class meta_class(nn.Module):
 
     def append_goal(self,x,g):
         batch_size, n_squared, p = x.size()
-        goal_tensor = torch.zeros((batch_size, n_squared, 1), device=device)
+        goal_tensor = torch.zeros((batch_size, n_squared, 1), device=self.device)
         for i in range(batch_size):
             goal_tensor[i,:,0] = g[i,0]
         x = torch.cat((x,goal_tensor), 2)
@@ -332,9 +387,6 @@ class meta_class(nn.Module):
         for s in size:
             num_features *= s
         return num_features  
-
-
-
 
 
 
