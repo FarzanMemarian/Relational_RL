@@ -1,3 +1,4 @@
+# AUTHOR: Farzan Memarian
 import random
 import numpy as np
 import copy
@@ -32,20 +33,27 @@ default_cntr_memory_size = 10000
 
 class net_MLP(nn.Module):
 
-    def __init__(self, ndim=5, out_dim=1):
+    def __init__(self, 
+            in_dim=5,
+            FC1_dim = 200,
+            FC2_dim = 200,
+            FC3_dim = 40, 
+            out_dim=1):
         super().__init__()
-        self.ndim = ndim
+        self.in_dim = in_dim
         # an affine operation: y = Wx + b
-        self.fc1 = nn.Linear(1 * ndim * ndim + 1, 500)
-        self.fc2 = nn.Linear(500, 50)
-        self.fc3 = nn.Linear(50, out_dim)
+        self.fc1 = nn.Linear(1 * in_dim * in_dim + 1, FC1_dim)
+        self.fc2 = nn.Linear(FC1_dim, FC2_dim)
+        self.fc3 = nn.Linear(FC2_dim, FC3_dim)
+        self.fc4 = nn.Linear(FC3_dim, out_dim)
 
     def forward(self, x, g):
         x = x.view(-1, self.num_flat_features(x))
         x = self.append_goal(x,g)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = F.relu(self.fc3(x))
+        x = self.fc4(x)
         return x
 
     def append_goal(self, x, g):
@@ -60,33 +68,36 @@ class net_MLP(nn.Module):
         return num_features 
 
 
-class net_conv_MLP(nn.Module):
+class net_CNN(nn.Module):
 
-    def __init__(self, num_kernels_lay1=8, num_kernels_lay2=16, ndim=5, out_dim=1):
+    def __init__(self, 
+            num_kernels_lay1=12, 
+            num_kernels_lay2=24,
+            FC1_dim = 100,
+            FC2_dim = 40, 
+            in_dim=5, 
+            out_dim=1):
         super().__init__()
         # 1 input image channel, 6 output channels, 5x5 square convolution kernel
         self.kernel_size = 2
         self.stride = 1
-        self.ndim = ndim
+        self.in_dim = in_dim
         self.num_kernels_lay2 = num_kernels_lay2
-        self.conv1 = nn.Conv2d(1, 5, kernel_size=1, stride=1)
-        self.bn1 = nn.BatchNorm2d(5)
-        self.conv2 = nn.Conv2d(5, num_kernels_lay1, kernel_size=self.kernel_size, stride=self.stride)
-        self.bn2 = nn.BatchNorm2d(num_kernels_lay1)
-        self.conv3 = nn.Conv2d(num_kernels_lay1, num_kernels_lay2, kernel_size=self.kernel_size, stride=self.stride)
-        self.bn3 = nn.BatchNorm2d(num_kernels_lay2)
+        self.conv1 = nn.Conv2d(2, num_kernels_lay1, kernel_size=self.kernel_size, stride=self.stride)
+        self.bn1 = nn.BatchNorm2d(num_kernels_lay1)
+        self.conv2 = nn.Conv2d(num_kernels_lay1, num_kernels_lay2, kernel_size=self.kernel_size, stride=self.stride)
+        self.bn2 = nn.BatchNorm2d(num_kernels_lay2)
         # an affine operation: y = Wx + b
         def conv2d_size_out(size, kernel_size, stride):
             return (size - (kernel_size - 1) - 1) // stride  + 1
-        self.final_conv_dim = conv2d_size_out(conv2d_size_out(ndim,self.kernel_size, self.stride),self.kernel_size, self.stride)
-        self.fc1 = nn.Linear(self.num_kernels_lay2 * self.final_conv_dim * self.final_conv_dim + 1, 100)
-        self.fc2 = nn.Linear(100, 40)
-        self.fc3 = nn.Linear(40, out_dim)
+        self.final_conv_dim = conv2d_size_out(conv2d_size_out(in_dim,self.kernel_size, self.stride),self.kernel_size, self.stride)
+        self.fc1 = nn.Linear(self.num_kernels_lay2 * self.final_conv_dim * self.final_conv_dim + 1, FC1_dim)
+        self.fc2 = nn.Linear(FC1_dim, FC2_dim)
+        self.fc3 = nn.Linear(FC2_dim, out_dim)
 
     def forward(self, x, g):
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
         x = x.view(-1, self.num_flat_features(x))
         x = self.append_goal(x,g)
         x = F.relu(self.fc1(x))
@@ -155,6 +166,8 @@ class hDQN:
                 device
                 ):
 
+        self.device = device
+
         self.env = env
         self.meta_policy_temp = meta_policy_temp
         self.cntr_policy_temp = cntr_policy_temp
@@ -162,7 +175,6 @@ class hDQN:
         self.meta_batch_size = meta_batch_size
         self.gamma = gamma
         self.target_tau = tau
-        self.device = device
         
         # replay memories and transitions
         self.cntr_Transition = cntr_Transition
@@ -175,34 +187,31 @@ class hDQN:
         # cntr networks
         self.cntr_network_name = cntr_network_name
         if self.cntr_network_name == "MLP":
-            self.policy_cntr_net = net_MLP(ndim=env.n_dim, out_dim=4).to(self.device)
-            self.target_cntr_net = net_MLP(ndim=env.n_dim, out_dim=4).to(self.device)
-        elif self.cntr_network_name == "conv_MLP":
-            self.policy_cntr_net = net_conv_MLP(ndim=env.n_dim, out_dim=4).to(self.device)
-            self.target_cntr_net = net_conv_MLP(ndim=env.n_dim, out_dim=4).to(self.device)
+            self.policy_cntr_net = net_MLP(in_dim=env.n_dim, out_dim=4).to(self.device)
+            self.target_cntr_net = net_MLP(in_dim=env.n_dim, out_dim=4).to(self.device)
+        elif self.cntr_network_name == "CNN":
+            self.policy_cntr_net = net_CNN(in_dim=env.n_dim, out_dim=4).to(self.device)
+            self.target_cntr_net = net_CNN(in_dim=env.n_dim, out_dim=4).to(self.device)
         elif self.cntr_network_name == "transformer":
             self.policy_cntr_net = transformer.att_class(n_dim=env.n_dim, out_dim=4, device=self.device).to(self.device)
             self.target_cntr_net = transformer.att_class(n_dim=env.n_dim, out_dim=4, device=self.device).to(self.device)
-
         self.target_cntr_net.load_state_dict(self.policy_cntr_net.state_dict())
         self.target_cntr_net.eval()
-        self.cntr_optimizer_name, self.cntr_loss_name, self.cntr_lr_name = cntr_optimizer, cntr_loss, cntr_lr
         self.cntr_optimizer, self.cntr_criterion = self.set_optim(self.policy_cntr_net.parameters(), 
-            self.cntr_optimizer_name, self.cntr_loss_name, self.cntr_lr_name)
+            cntr_optimizer, cntr_loss, cntr_lr)
         self.cntr_clamp = cntr_clamp
 
         # meta networks
         self.meta_network_name = meta_network_name
         if self.meta_network_name == "MLP":
-            self.policy_meta_net = net_MLP(ndim=env.n_dim).to(self.device)
-            self.target_meta_net = net_MLP(ndim=env.n_dim).to(self.device)
-        elif self.meta_network_name == "conv_MLP":
-            self.policy_meta_net = net_conv_MLP(ndim=env.n_dim, out_dim=1).to(self.device)
-            self.target_meta_net = net_conv_MLP(ndim=env.n_dim, out_dim=1).to(self.device)
+            self.policy_meta_net = net_MLP(in_dim=env.n_dim).to(self.device)
+            self.target_meta_net = net_MLP(in_dim=env.n_dim).to(self.device)
+        elif self.meta_network_name == "CNN":
+            self.policy_meta_net = net_CNN(in_dim=env.n_dim, out_dim=1).to(self.device)
+            self.target_meta_net = net_CNN(in_dim=env.n_dim, out_dim=1).to(self.device)
         elif self.meta_network_name == "transformer":
             self.policy_meta_net = transformer.att_class(n_dim=env.n_dim, out_dim=1, device=self.device).to(self.device)
             self.target_meta_net = transformer.att_class(n_dim=env.n_dim, out_dim=1, device=self.device).to(self.device)
- 
         self.target_meta_net.load_state_dict(self.policy_meta_net.state_dict())
         self.target_meta_net.eval()
         self.meta_optimizer, self.meta_criterion = self.set_optim(self.policy_meta_net.parameters(), 
@@ -214,8 +223,7 @@ class hDQN:
         if optimizer_str == 'SGD':
             optimizer = optim.SGD(params, lr=lr)
         if optimizer_str == 'Adam':
-            optimizer = optim.Adam(params, lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, 
-                amsgrad=False)
+            optimizer = optim.Adam(params, lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
         if optimizer_str == 'RMSprop':
             optimizer = optim.RMSprop(params, lr=lr, alpha=0.99, eps=1e-08, weight_decay=0, 
                 momentum=0, centered=False)
@@ -227,34 +235,35 @@ class hDQN:
 
         return optimizer, criterion
 
-    def select_goal(self, agent_state):
+    def select_goal(self, agent_loc):
         # softmax approach
         with torch.no_grad():
             Q = np.zeros(len(self.env.current_objects))
             for counter, goal in enumerate(self.env.current_objects):
-                agent_env_state = utils.agent_env_state(agent_state, self.env.env_state, self.device)
+                agent_env_state = utils.agent_env_state(agent_loc, self.env.env_state)
                 # goal_tensor = torch.unsqueeze(torch.unsqueeze(torch.tensor(goal),0),0)
                 pred = self.Q_meta(agent_env_state, goal, False)
                 Q[counter] = pred.item()
 
-            goal_idxs = np.arange(len(Q))
-            probabilities = np.exp(self.meta_policy_temp*Q) / sum(np.exp(self.meta_policy_temp * Q))
-            # print ("probabilities: {}".format(probabilities))
-            if np.isnan(probabilities[0]):
-                set_trace()            
-            goal_idx = np.random.choice(goal_idxs, 1, p=probabilities)[0]
-            goal = self.env.current_objects[goal_idx]
+        goal_idxs = np.arange(len(Q))
+        probabilities = np.exp(self.meta_policy_temp*Q) / sum(np.exp(self.meta_policy_temp * Q))
+        # print ("probabilities: {}".format(probabilities))
+        if np.isnan(probabilities[0]):
+            set_trace()            
+        goal_idx = np.random.choice(goal_idxs, 1, p=probabilities)[0]
+        goal = self.env.current_objects[goal_idx]
         # update environment
         self.env.selected_goals.append(goal)
+        # goal = torch.tensor([goal], dtype=torch.float, device=self.device)
         return goal
 
-    # def select_goal(self, agent_state):
+    # def select_goal(self, agent_loc):
     #     # epsilon greedy
     #     if self.meta_policy_temp < random.random():
     #         with torch.no_grad():
     #             Q = []
     #             for goal in self.env.current_objects:
-    #                 agent_env_state = utils.agent_env_state(agent_state, self.env.env_state)
+    #                 agent_env_state = utils.agent_env_state(agent_loc, self.env.env_state)
     #                 pred = self.Q_meta(agent_env_state, goal, False)
     #                 Q.append(pred.item())
     #             goal_idx = np.argmax(Q)
@@ -270,34 +279,33 @@ class hDQN:
         # Don't call this function directly, it would always be called from select_goal()
         goal_idx = int(np.random.choice(len(self.env.current_objects)))
         goal = self.env.current_objects[goal_idx]
+        # goal = torch.tensor([goal], dtype=torch.float, device=self.device)
         return goal
 
-    def select_action(self, agent_state, env_state, goal):
+    def select_action(self, agent_loc, env_state, goal):
         # softmax policy
-        i = agent_state[0,0].item()
-        j = agent_state[0,1].item()
+        agent_env_state = utils.agent_env_state(agent_loc, env_state)
         with torch.no_grad():
-            agent_env_state = utils.agent_env_state(agent_state, env_state, self.device)
             action_probs_tensor = self.Q_cntr(agent_env_state, goal, target=False)
-            action_probs = np.squeeze(action_probs_tensor.cpu().numpy())
-            # action_probs = np.zeros(4)
-            # for counter, item in enumerate(action_probs_tensor[0,:]):
-            #     action_probs[counter] = item.item()
-            action_idxs = np.arange(len(action_probs))
-            probabilities = np.exp(self.cntr_policy_temp*action_probs) / np.sum(np.exp(self.cntr_policy_temp*action_probs))
-            if np.isnan(probabilities[0]):
-                set_trace()
-            action_idx = torch.tensor(np.array(np.random.choice(action_idxs, 1, p=probabilities)[0]))
-            action = self.env.all_actions[action_idx.item()]
+        action_probs = np.squeeze(action_probs_tensor.cpu().numpy())
+        # action_probs = np.zeros(4)
+        # for counter, item in enumerate(action_probs_tensor[0,:]):
+        #     action_probs[counter] = item.item()
+        action_idxs = np.arange(len(action_probs))
+        probabilities = np.exp(self.cntr_policy_temp*action_probs) / np.sum(np.exp(self.cntr_policy_temp*action_probs))
+        if np.isnan(probabilities[0]):
+            set_trace()
+        action_idx = torch.tensor(np.array(np.random.choice(action_idxs, 1, p=probabilities)[0]))
+        action = self.env.all_actions[action_idx.item()]
         return action_idx, action, action_probs
 
-    # def select_action(self, agent_state, env_state, goal):
+    # def select_action(self, agent_loc, env_state, goal):
     #     # epsilon greedy
-    #     i = agent_state[0,0].item()
-    #     j = agent_state[0,1].item()
+    #     i = agent_loc[0,0].item()
+    #     j = agent_loc[0,1].item()
     #     if random.random() > self.cntr_policy_temp:
     #         with torch.no_grad():
-    #             agent_env_state = utils.agent_env_state(agent_state, env_state)
+    #             agent_env_state = utils.agent_env_state(agent_loc)
     #             action_probs = self.Q_cntr(agent_env_state, goal, target=False) 
     #             action_idx = action_probs.max(1)[1]
     #             action = self.env.all_actions[action_idx.item()]
@@ -356,13 +364,11 @@ class hDQN:
                 Q_policys = self.policy_meta_net(agent_env_state, goal)
         return Q_policys
 
-
     def _update_cntr(self):
         if len(self.cntr_memory) < self.batch_size:
             return 100000
         sample_size = min(self.batch_size, len(self.cntr_memory))
         exps = self.cntr_memory.sample(sample_size)
-        
         state_batch = torch.cat([torch.unsqueeze(exp.agent_env_cntr, 0) for exp in exps])
         meta_goal_batch = torch.cat([torch.unsqueeze(exp.meta_goal,0) for exp in exps])
         not_cntr_done_mask = torch.tensor(tuple(map(lambda s: s != True, [exp.cntr_done for exp in exps])), 
@@ -391,8 +397,9 @@ class hDQN:
             print("Q targets problems...")
 
         Q_targets = torch.unsqueeze(Q_targets, 1)
-        self.cntr_optimizer.zero_grad()
         loss = self.cntr_criterion(Q_policys, Q_targets)
+        self.cntr_optimizer.zero_grad()
+        params_t = list(self.policy_cntr_net.parameters())
         loss.backward()
         if self.cntr_clamp:
             for param in self.policy_cntr_net.parameters():
@@ -401,12 +408,11 @@ class hDQN:
         
         #Update target network
         with torch.no_grad():
-            cntr_weights = self.policy_cntr_net.parameters()
+            cntr_policy_weights = self.policy_cntr_net.parameters()
             cntr_target_weights = self.target_cntr_net.parameters()
-
-            for layer_w, target_layer_w in zip(cntr_weights, cntr_target_weights):
+            for layer_w, target_layer_w in zip(cntr_policy_weights, cntr_target_weights):
                 target_layer_w = self.target_tau * layer_w + (1 - self.target_tau) * target_layer_w
-
+        # self.target_cntr_net.zero_grad()
         return loss.item()
 
     def _update_meta(self):
@@ -456,21 +462,24 @@ class hDQN:
                 Q_targets[i,0] +=  self.gamma * (next_state_V)
                 # Q_targets = (next_state_Vs * self.gamma) + reward_batch
 
-        self.meta_optimizer.zero_grad()
+        
         loss = self.meta_criterion(Q_policys, Q_targets)
+        self.meta_optimizer.zero_grad()
         loss.backward()
         if self.meta_clamp:
             for param in self.policy_meta_net.parameters():
                 param.grad.data.clamp_(-1, 1)
         self.meta_optimizer.step()
+        
 
         #Update target network
         with torch.no_grad():
             meta_weights = self.policy_meta_net.parameters()
             meta_target_weights = self.target_meta_net.parameters()
-
             for layer_w, target_layer_w in zip(meta_weights, meta_target_weights):
                 target_layer_w = self.target_tau * layer_w + (1 - self.target_tau) * target_layer_w
+        # self.policy_meta_net.zero_grad()
+        # self.target_meta_net.zero_grad()
         return loss.item()
 
     def update(self, meta=False):

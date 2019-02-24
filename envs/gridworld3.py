@@ -1,3 +1,4 @@
+# AUTHOR: Farzan Memarian
 import numpy as np
 import math
 import copy
@@ -31,7 +32,11 @@ class Gridworld: # Environment
         int_goal_reward, 
         int_step_reward, 
         int_wrong_goal_reward,
-        reset_type):
+        reset_type,
+        device):
+
+        # set device
+        self.device = device
 
         # creates a square gridworld
         self.n_dim = n_dim
@@ -41,7 +46,7 @@ class Gridworld: # Environment
         self.num_gridworlds = num_gridworlds
 
         # objects, gridworld and goals
-        self.agent_loc = torch.zeros((1,2),dtype=torch.int)
+        self.agent_loc = torch.zeros((1,2),dtype=torch.int, device=self.device)
         self.env_state_original = None
         self.original_objects = None
         self.original_object_idxs = None
@@ -110,16 +115,12 @@ class Gridworld: # Environment
                         self.allowable_actions[(i,j)] = ['U','L']
                         self.allowable_action_idxs[(i,j)] = [0,3]
 
-    def update_target_goal(self):
-        if self.current_objects:
-            self.current_target_goal = self.current_objects[0]
-            self.current_target_goal_idx = self.current_object_idxs[0]
 
     def _create_objects(self):
         arr = np.arange(self.min_num, self.max_num+1)
         objects = np.random.choice(arr, size=self.n_obj, replace=False, p=None)
         objects = [int(element) for element in objects]   
-        objects.sort(reverse=False)
+        # objects.sort(reverse=False)
         return objects
 
     def _place_objects(self):
@@ -153,7 +154,7 @@ class Gridworld: # Environment
         if reset_type == "reset":
         # the function creates the same gridworld as the original
             if not self.is_env_state_created:
-                self.env_state_original = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
+                self.env_state_original = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32, device=self.device)
                 self.original_objects = self._create_objects()
                 self.original_object_idxs = self._place_objects()
                 self.is_env_state_created = True
@@ -161,7 +162,7 @@ class Gridworld: # Environment
         elif reset_type == "reset_total":
             # whole gridworld is created from the beginning and agent is 
                         # placed in a random position
-            self.env_state_original = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32)
+            self.env_state_original = torch.zeros((self.n_dim, self.n_dim),dtype=torch.float32, device=self.device)
             self.original_objects = self._create_objects()
             self.original_object_idxs = self._place_objects()
 
@@ -176,15 +177,14 @@ class Gridworld: # Environment
         self.current_objects = copy.deepcopy(self.original_objects)
         self.current_object_idxs = copy.deepcopy(self.original_object_idxs)
         self.selected_goals = []
-        self.current_target_goal = self.current_objects[0]
-        self.current_target_goal_idx = self.current_object_idxs[0]
+        self.current_target_goal = min(self.current_objects)
+        self.current_target_goal_idx = self.current_objects.index(self.current_target_goal)
         self.agent_loc[0,:] = self._random_start()
         return copy.deepcopy(self.agent_loc), copy.deepcopy(self.env_state)
 
 
     def _random_start(self):
-        start = torch.zeros([1,2], dtype=torch.int)
-
+        start = torch.zeros([1,2], dtype=torch.int, device=self.device)
         done = False
         while not done:
             i = np.random.choice(self.n_dim)
@@ -196,9 +196,14 @@ class Gridworld: # Environment
         return start
 
     def remove_object(self, i, j):
+        # only the current goal can be removed
         self.env_state[i,j] = 0
-        self.current_object_idxs.pop(0)
-        removed_object = self.current_objects.pop(0)
+        self.current_object_idxs.pop(self.current_target_goal_idx)
+        removed_object = self.current_objects.pop(self.current_target_goal_idx)
+        # update_target_goal
+        if self.current_objects:
+            self.current_target_goal = min(self.current_objects)
+            self.current_target_goal_idx = self.current_objects.index(self.current_target_goal)
         return removed_object
 
     def step(self, action_idx):

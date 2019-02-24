@@ -1,3 +1,4 @@
+# AUTHOR: Farzan Memarian
 import numpy as np
 import torch
 import torch.nn as nn
@@ -33,6 +34,75 @@ def clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
 
 
+class att_class(nn.Module):
+    def __init__(self, device, n_dim=5, N=6, last_conv_depth=29, 
+               d_model=32, d_ff=80, h=8, dropout=0.1, out_dim=1):
+        super().__init__()
+        self.device = device
+        self.n_dim = n_dim
+        self.conv1 = nn.Conv2d(2,  16, kernel_size=2)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, last_conv_depth, kernel_size=2)
+        self.bn2 = nn.BatchNorm2d(last_conv_depth)
+        # an affine operation: y = Wx + b
+        self.last_conv_depth = last_conv_depth
+        self.final_conv_dim = n_dim - 2
+        self.c = copy.deepcopy
+        self.d_model=d_model 
+        self.d_ff=d_ff 
+        self.h=h 
+        self.dropout=dropout
+        self.attn = MultiHeadedAttention(self.h, self.d_model)
+        self.ff = PositionwiseFeedForward(self.d_model, self.d_ff, self.dropout)
+        self.EncoderLayer = EncoderLayer(self.d_model, self.c(self.attn), self.c(self.ff), self.dropout)
+        self.Encoder = Encoder(self.EncoderLayer, N)
+        self.fc1 = nn.Linear((self.last_conv_depth+3), 100)
+        self.fc2 = nn.Linear(100, 40)
+        self.fc3 = nn.Linear(40, out_dim)
+
+    def forward(self, x, g):
+        "Helper: Construct a model from hyperparameters."
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x, batch_size = self.append_pos(x)
+        x = x.view(batch_size, -1, self.last_conv_depth+2)
+        x = self.append_goal(x,g)
+        x = self.Encoder(x, None)
+        x = x.max(1)[0]
+        # x = x.view(-1, self.num_flat_features(x))
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+        
+    def append_pos(self, x):
+        batch_size, depth, n, n = x.size()
+        pos_tensor = torch.zeros((batch_size, 2 ,n, n), device=self.device)
+        coord = np.linspace(-1,1,n)
+        for i in range(n):
+            for j in range(n):
+                pos_tensor[:,0,i,j]=coord[i]
+                pos_tensor[:,1,i,j]=coord[j]
+        x = torch.cat((x,pos_tensor), 1)
+        return x, batch_size
+
+    def append_goal(self,x,g):
+        batch_size, n_squared, p = x.size()
+        goal_tensor = torch.zeros((batch_size, n_squared, 1), device=self.device)
+        for i in range(batch_size):
+            goal_tensor[i,:,0] = g[i,0]
+        x = torch.cat((x,goal_tensor), 2)
+        return x
+
+    def num_flat_features(self, x):
+        size = x.size()[1:]  # all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features  
+
+
 class Encoder(nn.Module):
     "Core encoder is a stack of N layers"
     def __init__(self, layer, N):
@@ -41,7 +111,7 @@ class Encoder(nn.Module):
         self.norm = LayerNorm(layer.size)
         
     def forward(self, x, mask):
-        "Pass the input (and mask) through each lcayer in turn."
+        "Pass the input (and mask) through each layer in turn."
         for layer in self.layers:
             x = layer(x, mask)
         return self.norm(x)
@@ -194,7 +264,6 @@ class MultiHeadedAttention(nn.Module):
             # Same mask applied to all h heads.
             mask = mask.unsqueeze(1)
         nbatches = query.size(0)
-        
         # 1) Do all the linear projections in batch from d_model => h x d_k 
         query, key, value = [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
              for l, x in zip(self.linears, (query, key, value))]
@@ -323,70 +392,7 @@ class PositionwiseFeedForward(nn.Module):
 #         return num_features  
 
 
-class att_class(nn.Module):
-    def __init__(self, n_dim=5, N=6, last_conv_depth=29, 
-               d_model=32, d_ff=80, h=8, dropout=0.1, out_dim=1, device='cpu'):
-        super().__init__()
-        self.device = device
-        self.n_dim = n_dim
-        self.conv1 = nn.Conv2d(1,  16, kernel_size=2)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, last_conv_depth, kernel_size=2)
-        self.bn2 = nn.BatchNorm2d(last_conv_depth)
-        # an affine operation: y = Wx + b
-        self.last_conv_depth = last_conv_depth
-        self.final_conv_dim = n_dim - 2
-        self.c = copy.deepcopy
-        self.d_model=d_model 
-        self.d_ff=d_ff 
-        self.h=h 
-        self.dropout=dropout
-        self.attn = MultiHeadedAttention(self.h, self.d_model)
-        self.ff = PositionwiseFeedForward(self.d_model, self.d_ff, self.dropout)
-        self.EncoderLayer = EncoderLayer(self.d_model, self.c(self.attn), self.c(self.ff), self.dropout)
-        self.Encoder = Encoder(self.EncoderLayer, N)
-        self.fc1 = nn.Linear(self.final_conv_dim**2 * (self.last_conv_depth+3), 40)
-        self.fc2 = nn.Linear(40, out_dim)
 
-    def forward(self, x, g):
-        "Helper: Construct a model from hyperparameters."
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x, batch_size = self.append_pos(x)
-        x = x.view(batch_size, -1, self.last_conv_depth+2)
-        x = self.append_goal(x,g)
-        x = self.Encoder(x, None)
-        x = x.view(-1, self.num_flat_features(x))
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-        
-    def append_pos(self, x):
-        batch_size, depth, n, n = x.size()
-        pos_tensor = torch.zeros((batch_size, 2 ,n, n), device=self.device)
-        coord = np.linspace(-1,1,n)
-        for i in range(n):
-            for j in range(n):
-                pos_tensor[:,0,i,j]=coord[i]
-                pos_tensor[:,1,i,j]=coord[j]
-        x = torch.cat((x,pos_tensor), 1)
-        return x, batch_size
-
-    def append_goal(self,x,g):
-        batch_size, n_squared, p = x.size()
-        goal_tensor = torch.zeros((batch_size, n_squared, 1), device=self.device)
-        for i in range(batch_size):
-            goal_tensor[i,:,0] = g[i,0]
-        x = torch.cat((x,goal_tensor), 2)
-        return x
-
-    def num_flat_features(self, x):
-        size = x.size()[1:]  # all dimensions except the batch dimension
-        num_features = 1
-        for s in size:
-            num_features *= s
-        return num_features  
 
 
 
